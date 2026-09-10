@@ -3,7 +3,7 @@ set -euo pipefail
 shadow_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$shadow_root"
 docker info >/dev/null
-python3 prepare.py
+python3 scripts/prepare.py
 if [[ ! -f bot.json ]]; then cp bot.json.example bot.json; fi
 if [[ ! -f ai.json ]]; then cp ai.json.example ai.json; fi
 chmod 600 .env ai.json bot.json

@@ -70,7 +70,7 @@ SQLite WAL 持久化在 `member-memory/memory.sqlite3`；无全量画像常驻�
 维护者可在服务器本地查看积压和错误：
 
 ```bash
-docker exec shadow-desktop-1 /opt/weixin-venv/bin/python /bot/member_memory_admin.py
+docker exec shadow-desktop-1 /opt/weixin-venv/bin/python /bot/scripts/member_memory_admin.py
 ```
 
 提供 `--group '<会话ID>' --member '<成员ID>'` 可查看该范围的关系数值与画像；加 `--evidence` 查看近期计算证据。这是服务器命令，不是给聊天模型的工具。不要把带私人内容的输出公开分享。

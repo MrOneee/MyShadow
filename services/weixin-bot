@@ -2,4 +2,4 @@
 export PYTHONDONTWRITEBYTECODE=1
 export WECHAT_UI_SCRIPT=/config/bot-ui/ui.py
 cd /bot
-exec /opt/weixin-venv/bin/python -u /bot/bootstrap.py
+exec /opt/weixin-venv/bin/python -u -m myshadow.bootstrap

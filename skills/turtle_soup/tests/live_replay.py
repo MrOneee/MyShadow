@@ -6,12 +6,12 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from ai_client import AIClient
+from myshadow.ai_client import AIClient
 from activity_runtime.registry import Registry
 from activity_runtime.models import StructuredModel
 from activity_runtime.host import Host
 from activity_runtime.contracts import Message
-from web_search import WebSearch
+from myshadow.web_search import WebSearch
 
 ROOT=Path(__file__).resolve().parents[3]
 CASES={

@@ -1,0 +1,6 @@
+* text=auto
+*.py text eol=lf
+*.mjs text eol=lf
+*.sh text eol=lf
+*.json text eol=lf
+services/* text eol=lf

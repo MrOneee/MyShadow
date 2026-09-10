@@ -2,6 +2,29 @@
 
 一个运行在 Linux 容器桌面中的微信群 AI 助手。它读取本机微信数据库，只响应真实的群聊 `@`，并通过桌面 UI 把回答发回原群。
 
+## 项目结构
+
+```text
+myshadow/          核心应用与领域模块
+activity_runtime/  通用活动宿主
+agent_runtime/     DSH 工具调用运行时
+bot_ui/            微信桌面自动化脚本
+skills/            可插拔场景技能
+tests/             自动化测试
+scripts/           本地准备、诊断与运维工具
+docs/              架构、能力与实现说明
+personas/          群聊人设配置
+```
+
+根目录只保留启动脚本、容器配置、依赖清单和配置示例。运行产生的账号配置、数据库、日志、截图和知识索引均由 `.gitignore` 排除。
+
+本地验证：
+
+```bash
+python -m unittest discover -s tests -t . -p 'test_*.py' -q
+node --test tests/test_ptc_runtime.mjs tests/test_web_result.mjs
+```
+
 ## 主要能力
 
 - 自动发现当前账号加入的群聊，不维护固定群白名单。
@@ -80,19 +103,6 @@ social-memory/                 私有运行数据，已加入 .gitignore
 
 > 这是非官方的实验项目。微信客户端、数据库结构和 UI 随版本变化，自动化可能失效。请只在自己的账号与设备上使用，并遵守适用的服务条款和法律。
 
-## 目录
-
-```text
-bot.py                 群消息轮询、上下文、摘要、发送与确认
-ai_client.py           OpenAI-compatible Chat Completions 客户端
-image_context.py       本群图片解码、视觉摘要及按群缓存
-persona.txt            全局群聊回复风格
-wechat_db.py           微信 SQLCipher 数据库密钥发现与只读快照
-bot_ui/ui.py           容器桌面内的 UI 自动化脚本
-services/weixin-bot    s6 服务入口
-compose.yaml           WeChat Selkies 容器配置
-```
-
 ## 环境要求
 
 - Linux amd64 主机
@@ -162,7 +172,7 @@ cat bot-health.json
 
 ## 数据库读取与内存
 
-免 @ 的选择性接话支持按群开启：明确叫名字、引用机器人回复可直接进入回复队列；短期追问和面向全群的求助按规则与轻量模型判断是否参与。仍使用原来的 3 秒轮询。配置、消息合并、主动接话间隔和局限见 [SELECTIVE_REPLY.md](SELECTIVE_REPLY.md)。
+免 @ 的选择性接话支持按群开启：明确叫名字、引用机器人回复可直接进入回复队列；短期追问和面向全群的求助按规则与轻量模型判断是否参与。仍使用原来的 3 秒轮询。配置、消息合并、主动接话间隔和局限见 [选择性回复](docs/SELECTIVE_REPLY.md)。
 
 快照按页读取主数据库和 WAL，只索引 WAL 已提交页的位置，并直接把解密缓冲区交给 SQLite，避免保留多份整库副本。快照连接离开 `with` 时会关闭；直接调用者仍需显式 `close()`。读取期间主库、WAL 或密钥文件发生变化时，本次快照作废，随后重试。
 
@@ -172,7 +182,7 @@ cat bot-health.json
 
 ## 测试
 
-定时与周期任务通过现有轮询驱动，支持单次、每天、每周和固定间隔；仅绑定的管理员微信ID能管理，重启后保留。配置与用法见 [SCHEDULED_TASKS.md](SCHEDULED_TASKS.md)。
+定时与周期任务通过现有轮询驱动，支持单次、每天、每周和固定间隔；仅绑定的管理员微信ID能管理，重启后保留。配置与用法见 [定时任务](docs/SCHEDULED_TASKS.md)。
 
 ```bash
 python3 -m unittest -v

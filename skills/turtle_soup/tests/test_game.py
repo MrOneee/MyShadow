@@ -1,7 +1,7 @@
 import json
 import time
 from unittest.mock import patch
-from test_activity_runtime import ActivityFixture
+from tests.test_activity_runtime import ActivityFixture
 
 
 class GameTests(ActivityFixture):

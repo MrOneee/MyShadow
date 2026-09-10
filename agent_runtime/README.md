@@ -24,7 +24,7 @@ QuickJS/WASM。模型代码没有 Node、文件系统、进程、环境变量或
 在此目录运行 `npm ci --ignore-scripts`。依赖只有 JavaScript 和 WASM，
 也可将按锁文件安装的 `node_modules` 与代码一起打包部署。
 
-检验：`node --test test_ptc_runtime.mjs`（在项目根目录执行），
-以及 Python 的 `test_agent_runtime`、`test_harness_research`。
+检验：`node --test tests/test_ptc_runtime.mjs`（在项目根目录执行），
+以及 Python 的 `tests.test_agent_runtime`、`tests.test_harness_research`。
 测评入口见 `benchmarks/ptc_eval.py`。历史工具仍受原有条数、时间范围和
 查询次数限制，PTC 不会将它扩展成全量群聊数据库。

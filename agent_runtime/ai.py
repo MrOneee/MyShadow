@@ -23,10 +23,10 @@ class HarnessAI:
 
 
 def complete_chat(ai,messages,weather,extra_tools,tool_handler,search):
-    from realtime import WEATHER_TOOL
+    from myshadow.realtime import WEATHER_TOOL
     from .research import material_request,HISTORY_OUTPUT
-    from background_knowledge import BACKGROUND_OUTPUT
-    from member_memory_policy import OUTPUT as MEMORY_OUTPUT
+    from myshadow.background_knowledge import BACKGROUND_OUTPUT
+    from myshadow.member_memory_policy import OUTPUT as MEMORY_OUTPUT
     tools=([WEATHER_TOOL] if weather else [])+list(extra_tools)
     research=material_request(messages) and not any(t.get('function',t)['name'] in ('manage_schedule','manage_memory') for t in tools)
     if research:
