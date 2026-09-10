@@ -18,7 +18,7 @@ from .ai_client import AIClient
 from .image_context import ImageContext, ImageUnavailable
 from .group_names import display_name, member_names
 from .conversations import direct_contacts, direct_id
-from .realtime import Weather, chat_complete, clock_context
+from .realtime import Weather, chat_complete, clock_context, WEATHER_TOOL, WEB_SEARCH_TOOL
 from .web_search import WebSearch
 from .native_stickers import NativeStickers, STICKER_TOOLS
 from .group_personas import load_personas, resolve as resolve_persona
@@ -135,6 +135,10 @@ def estimate_tokens(value):
     cjk = len(re.findall(r'[\u3400-\u9fff\uf900-\ufaff]', text))
     estimate = cjk + (len(text) - cjk + 3) // 4
     return int(estimate * 1.25) + 16
+
+
+class ContextBudgetExceeded(RuntimeError):
+    """A fixed request cannot fit; retrying it cannot recover space."""
 
 
 class Bot:
@@ -772,6 +776,35 @@ class Bot:
     def context_budget_for(self, group):
         return self.persona_for(group).get('context_token_budget', self.config.get('context_token_budget', 12800))
 
+    def input_budget_for(self, trigger):
+        """Reserve current tool schemas and output, never hypothetical history results."""
+        tools = []
+        if getattr(self, 'weather', None):
+            tools.append(WEATHER_TOOL)
+        if getattr(self, 'search', None):
+            tools.append(WEB_SEARCH_TOOL)
+        if getattr(self, 'history_search', None):
+            tools.append(HISTORY_TOOL)
+        schedule = bool(getattr(self, 'scheduler', None)) and schedule_intent(trigger['prompt'])
+        if schedule:
+            schedule = self.scheduler.authorized(self.trigger_sender(trigger))
+        if schedule:
+            tools.append(SCHEDULE_TOOL)
+        elif getattr(self, 'stickers', None):
+            tools.extend(STICKER_TOOLS)
+        background = getattr(self, 'background', None)
+        if background and background.enabled(trigger['group_id']):
+            tools.append(BACKGROUND_TOOL)
+        if getattr(self, 'memory_v2', False) and getattr(self, 'social', None):
+            tools.append(RECALL_TOOL)
+            if self.config.get('mode') == 'send' and manage_intent(trigger['prompt']):
+                tools.append(MANAGE_TOOL)
+        config = getattr(getattr(self, 'ai', None), 'config', {})
+        output = config.get('max_tokens', 1024) if isinstance(config, dict) else 1024
+        # Protocol framing and small per-turn instructions need space too.
+        reserve = output + 512 + (estimate_tokens(tools) if tools else 0)
+        return max(0, self.context_budget_for(trigger['group_id']) - reserve)
+
     def mention_config(self, group):
         profile = self.persona_for(group)
         return {**self.config, 'mention_aliases': [self.config['bot_name'], *profile['aliases']]}
@@ -783,15 +816,8 @@ class Bot:
                    'recent_messages': self.public_history(history)}
         background = getattr(self, 'background', None)
         recalled = background.automatic(group.get('group_id', ''), prompt) if background else ''
-        sticker_hint = ('\n表情包是你的自然回复方式之一，不必等用户明确要求。根据当前群语境，在纯文字、纯表情、短句加表情中选择。'
-                        '被调侃、轻微尴尬、接梗、表达开心惊讶无语赞同，或一句文字显得多余时，可以主动调用search_stickers和send_sticker。'
-                        '当主要是在表达情绪、没有实质问题需要解答时，优先考虑一张真实表情，不要总用文字加Unicode emoji替代。'
-                        '不要只因出现尴尬、无语等关键词就触发，要理解真实语气。不确定对方在开玩笑还是认真难过时用文字。'
-                        '严肃求助、明显伤心、真实争吵、事实查询优先认真回答；不要用表情回避不知道答案的问题、嘲讽求助者或激化争吵。'
-                        '表情已经表达清楚就用reply_mode=sticker_only，不补“表情已发送”。确需补充才用with_text，后续只说一句自然的话，不解释选图原因。'
-                        '不设置时间冷却，但不连续两次主动发表情；用户明确要求表情可放宽连续限制。每条提问最多一张。'
-                        '每轮只调用一次搜索工具，intent写表达意图，query用2到4字短词、最多6字。工具内部最多换词重试一次，返回为空就正常回复；发送失败不反复尝试、不承诺稍后补发。只有confirmed表示已送达。'
-                        '不要用Unicode表情冒充表情包；不允许指定群，发送目标已绑定当前群。使用微信原生搜索和爱心收藏，支持原生动图。'
+        sticker_hint = ('\n本轮表情工具是否可用以提供的工具列表为准。轻松闲聊可顺手用一张原生表情；'
+                        '严肃问题用文字。遵循人设中的搜索、候选和送达规则；不编造画面，不重复发送。'
                         if getattr(self, 'stickers', None) else '')
         return [{'role': 'system', 'content': self.system_prompt_for(group.get('group_id', '')) + sticker_hint +
             ((MEMBER_READ_POLICY if getattr(self,'memory_v2',False) else READ_POLICY) if getattr(self, 'social', None) else '') +
@@ -822,11 +848,7 @@ class Bot:
                                                      self.related_senders(trigger, history, anchor))
             except (ValueError, OSError, sqlite3.Error):
                 print(json.dumps({'event': 'social_memory_read_error'}), flush=True)
-        budget = self.context_budget_for(trigger['group_id'])
-        if getattr(self, 'history_search', None):
-            budget -= min(6000, budget // 2)  # Leave space for two bounded history lookups.
-        elif getattr(self, 'weather', None) or getattr(self, 'stickers', None):
-            budget -= min(4000, budget // 3)  # Tool definitions/results share the total context limit.
+        budget = self.input_budget_for(trigger)
         messages = self.message_payload(group, history, sender, trigger['prompt'], summary, image_context, social_context)
         while history and estimate_tokens(messages) > budget:
             # Compress oldest messages in bounded chunks while keeping a recent raw tail.
@@ -861,7 +883,7 @@ class Bot:
             essential=self.social.context(trigger['group_id'],anchor['sender'],compact='essential') if getattr(self,'memory_v2',False) else ''
             messages = self.message_payload(group, history, sender, trigger['prompt'], summary, image_context,essential)
         if estimate_tokens(messages) > budget:
-            raise RuntimeError('Question and image descriptions exceed the context budget')
+            raise ContextBudgetExceeded('Question and image descriptions exceed the context budget')
         return messages, len(history)
 
     def trigger_sender(self, trigger):
@@ -974,7 +996,16 @@ class Bot:
                     {'role': 'user', 'content': json.dumps({'context': json.loads(plan['context']), 'direction': plan['goal']}, ensure_ascii=False)}]
                 context_count = len(json.loads(plan['context']).get('recent_messages', []))
             else:
-                messages, context_count = self.messages_for(row)
+                try:
+                    messages, context_count = self.messages_for(row)
+                except ContextBudgetExceeded:
+                    # Fixed prompt overflow is permanent for this request, not a transient API error.
+                    with self.state:
+                        self.state.execute('UPDATE replies SET reply=?,status=? WHERE id=?',
+                            ('这次消息和上下文太长了，没能处理。请把问题拆短一点再发；本次没有设置或修改任务。',
+                             'ready' if self.config['mode'] == 'send' else 'preview', row['id']))
+                    print(json.dumps({'event': 'context_budget_exceeded', 'id': row['id']}), flush=True)
+                    continue
                 if plan:
                     messages[0]['content'] += '\n本轮是自然参与群聊，不必装作有人提问。' + ('用一两句接话，不展开教程。' if plan['style']=='brief' else '按实际问题认真回答。')
                     if plan['style'] in ('brief', 'answer') and plan['goal'].strip():
