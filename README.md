@@ -1,4 +1,4 @@
-# Weixin Group AI Bot
+# MyShadow
 
 一个运行在 Linux 容器桌面中的微信群 AI 助手。它读取本机微信数据库，只响应真实的群聊 `@`，并通过桌面 UI 把回答发回原群。
 
