@@ -1,0 +1,11 @@
+{
+  "id": "turtle_soup",
+  "api_version": 1,
+  "state_version": 1,
+  "entry": "handler.py",
+  "description": "在群里挑选海龟汤并主持多人推理，记录解读进度、提供提示、揭晓与复盘。",
+  "failure_message": "这轮处理出了点问题，刚才的问题没有计入进度。请把问题再发一次，我接着主持。",
+  "capabilities": ["model", "search", "contents", "timers", "send", "progress"],
+  "roles": {"judge": ["puzzle", "rulings"], "verify": [], "curator": [], "reviewer": [], "speaker": [], "intent": []},
+  "actions": {"respond": ["member"], "start": ["member"], "hint": ["member"], "pause": ["owner", "admin"], "resume": ["owner", "admin"], "end": ["owner", "admin"], "solve": ["member"], "select": ["owner", "admin"]}
+}

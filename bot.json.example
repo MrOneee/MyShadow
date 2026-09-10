@@ -1,0 +1,47 @@
+{
+  "bot_name": "",
+  "bot_id": "",
+  "mode": "preview",
+  "poll_seconds": 3,
+  "max_age_seconds": 300,
+  "system_prompt_file": "persona.txt",
+  "context_token_budget": 12800,
+  "context_scan_messages": 2000,
+  "summary_max_tokens": 1536,
+  "vision_enabled": false,
+  "stickers_enabled": false,
+  "social_memory_enabled": false,
+  "history_search_enabled": true,
+  "group_workers": 2,
+  "harness": {
+    "enabled": true,
+    "max_steps": 12,
+    "max_tool_calls": 16,
+    "turn_timeout_seconds": 240
+  },
+  "activities": {
+    "enabled": true,
+    "skills": [
+      "turtle_soup"
+    ],
+    "model": "deepseek-v4-pro"
+  },
+  "scheduler": {
+    "enabled": false,
+    "admin_id": ""
+  },
+  "selective_reply": {
+    "enabled": false,
+    "groups": [],
+    "aliases": [
+      "影",
+      "道长"
+    ],
+    "decision": {
+      "enabled": false,
+      "max_replies_per_hour": 12,
+      "max_decisions_per_hour": 60,
+      "proactive_daily_limit": 1
+    }
+  }
+}

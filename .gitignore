@@ -1,0 +1,37 @@
+.env
+ai.json
+bot.json
+*_keys.json
+*.sqlite3*
+*.lock
+bot-health.json
+routing-safety-lock.json
+data/
+social-memory/
+harness-data/
+logs/
+backups/
+release-*/
+.remote-*/
+bin/
+docker-client/
+.docker-client/
+downloads/
+.venv/
+node_modules/
+.pytest_cache/
+.coverage*
+__pycache__/
+*.pyc
+*.log
+*.png
+image-*.json
+compose.yaml.before-*
+# Generated from a locally supplied source text; keep source-derived cards private.
+knowledge/jiangcheng/
+# Generated verification artifacts can contain environment-specific metadata.
+docs/*evaluation*.json
+docs/*deployment*.json
+docs/*production-check*.json
+docs/*harness-smoke*.json
+benchmarks/*results*.json

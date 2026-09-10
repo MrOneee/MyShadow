@@ -1,0 +1,41 @@
+name: shadow
+services:
+  desktop:
+    # WeChat Selkies 0.0.16-minimal, verified linux/amd64 manifest.
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: shadow-weixin:local
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18080:3000"
+      - "127.0.0.1:18443:3001"
+    volumes:
+      - ./data/wechat:/config
+      - .:/bot
+    cap_add:
+      - SYS_PTRACE
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Asia/Shanghai
+      LC_ALL: zh_CN.UTF-8
+      AUTO_START_WECHAT: "true"
+      AUTO_START_QQ: "false"
+      CUSTOM_USER: ${WECHAT_WEB_USER:-weixin}
+      PASSWORD: ${WECHAT_WEB_PASSWORD:?Set WECHAT_WEB_PASSWORD before starting}
+      WECHAT_NAME: ${WECHAT_NAME:-}
+      WECHAT_BOT_ID: ${WECHAT_BOT_ID:-}
+      BOT_MODE: ${BOT_MODE:-preview}
+    shm_size: 1gb
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.0
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

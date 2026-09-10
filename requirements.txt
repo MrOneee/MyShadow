@@ -1,0 +1,6 @@
+cryptography>=42,<47
+Pillow>=10.4,<13
+python-xlib==0.33
+
+deepseek-harness-sdk==0.1.2rc1
+deepseek-harness-runtime-bin==0.1.2rc1
