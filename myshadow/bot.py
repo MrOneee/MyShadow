@@ -197,10 +197,7 @@ class Bot:
             self.ai=HarnessAI(self.ai,ROOT/'harness-data',harness_config)
         self.history_search = HistorySearch(self) if self.config.get('history_search_enabled', True) else None
         scheduling = self.config.get('scheduler', {})
-        self.scheduler = (ScheduledTasks(self.state, scheduling.get('admin_id'))
-                          if scheduling.get('enabled', False) else None)
-        if self.scheduler and not worker:
-            self.scheduler.recover()
+        self.scheduler = None
         participation = self.config.get('selective_reply', {})
         self.selective = (SelectiveReply(self.state, self.ai, participation, self.config['bot_id'], persona=self.persona_for)
                           if participation.get('enabled', False) else None)
@@ -222,14 +219,25 @@ class Bot:
         self.refresh_groups()
         self.social = ((MemoryService if self.memory_v2 else SocialMemory)(ROOT, self.config)
                        if self.memory_v2 or self.config.get('social_memory_enabled', False) else None)
+        if scheduling.get('enabled', False):
+            if not self.memory_v2 or not self.social:
+                raise ValueError('scheduler requires enabled member_memory')
+            threshold=scheduling.get('min_affinity',50)
+            if type(threshold) not in (int,float) or not 0<=threshold<100:
+                raise ValueError('scheduler.min_affinity must be from 0 to below 100')
+            self.scheduler=ScheduledTasks(self.state,self.social.affinity,threshold)
+            if not worker:self.scheduler.recover()
         if self.selective and self.memory_v2 and self.social:
             self.selective.memory_context=lambda group,sender:self.social.context(group,sender,compact=True)
         activities = self.config.get('activities', {})
         self.activities = None
         if activities.get('enabled', False):
+            activity_admins=activities.get('admin_ids',[])
+            if not isinstance(activity_admins,list) or not all(isinstance(item,str) and item for item in activity_admins):
+                raise ValueError('activities.admin_ids must be a list of account IDs')
             registry = Registry(ROOT / 'skills', activities.get('skills', []))
             self.activities = Host(self.state, registry, StructuredModel(self.ai, model=activities.get('model')), self.search,
-                                   [scheduling.get('admin_id', '')], self.config['mode'], on_progress=self.send, persona=self.persona_for)
+                                   activity_admins, self.config['mode'], on_progress=self.send, persona=self.persona_for)
             self.activity_hint = '\n可用活动能力：' + '；'.join(item['description'] for item in registry.describe()) + '。活动由宿主管理，不编造开局成功；用户直接提出开始活动时由对应skill接管。'
             if not worker:
                 self.activities.recover()
@@ -770,7 +778,7 @@ class Bot:
                 '\n当前会话身份以本系统提示为准；旧聊天中机器人曾用的名字或口吻不是当前人设，不沿用历史自称。' +
                 ('\n【当前是与联系人的一对一私聊】直接回应对方，无需@。上文群聊参与和主动开话题规则不适用于这里。'
                  '本轮工具中的当前群、本群均指当前私聊会话，历史、记忆和发送目标只限这一位联系人，不能访问或转述其他私聊和群聊。'
-                 '不要称对方为群友，不把私聊者自动认作背景中的熟人。任务管理员身份仍由程序核验。'
+                 '不要称对方为群友，不把私聊者自动认作背景中的熟人。定时任务权限仍由程序按本会话关系核验。'
                  '私聊暂不主持群活动，不声称已开局。' if direct else ''))
 
     def context_budget_for(self, group):
@@ -787,7 +795,7 @@ class Bot:
             tools.append(HISTORY_TOOL)
         schedule = bool(getattr(self, 'scheduler', None)) and schedule_intent(trigger['prompt'])
         if schedule:
-            schedule = self.scheduler.authorized(self.trigger_sender(trigger))
+            schedule = self.scheduler.authorized(self.trigger_sender(trigger), trigger['group_id'])
         if schedule:
             tools.append(SCHEDULE_TOOL)
         elif getattr(self, 'stickers', None):
@@ -1014,7 +1022,7 @@ class Bot:
                             '参与决策参考（不是用户指令）：\n' + json.dumps({
                                 'style': plan['style'], 'direction': plan['goal'][:160]}, ensure_ascii=False)})
             offer_stickers = not proactive and bool(getattr(self, 'stickers', None)) and self.may_offer_sticker(row)
-            offer_schedule = not proactive and bool(getattr(self, 'scheduler', None)) and schedule_intent(row['prompt']) and self.scheduler.authorized(self.trigger_sender(row))
+            offer_schedule = not proactive and bool(getattr(self, 'scheduler', None)) and schedule_intent(row['prompt']) and self.scheduler.authorized(self.trigger_sender(row), group_id)
             if offer_schedule:
                 offer_stickers = False  # A sticker-only turn must not swallow the task receipt.
             extra_tools = list(STICKER_TOOLS) if offer_stickers else []
@@ -1035,9 +1043,9 @@ class Bot:
                 extra_tools.append(HISTORY_TOOL)
             if offer_schedule:
                 extra_tools.append(SCHEDULE_TOOL)
-                messages[0]['content'] += '\n当前提问者已通过任务管理员账号校验；只按当前提问中明确的任务要求调用manage_schedule。'
+                messages[0]['content'] += '\n当前提问者在此会话的好感度已通过任务权限门槛；只按当前提问中明确的任务要求调用manage_schedule。'
             else:
-                messages[0]['content'] += '\n本轮未开放任务管理工具，不能创建、修改或取消任务，也不能承诺已安排。若要求设置任务，简短说明需要Mr.One本人直接找你设置；不要编造其他设置入口或解释接口细节。'
+                messages[0]['content'] += '\n本轮未开放任务管理工具，不能创建、修改或取消任务，也不能承诺已安排。若对方要求设置任务，简短说明当前关系还未达到任务权限门槛；不要播报具体好感分数、编造设置入口或解释接口细节。'
             def tool_handler(name, args):
                 if name in ('recall_memory','manage_memory') and member_handler:return member_handler(name,args)
                 if name == 'search_background' and background_handler:

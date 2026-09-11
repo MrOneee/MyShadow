@@ -19,7 +19,8 @@ class ScheduledTests(unittest.TestCase):
         self.db.row_factory = sqlite3.Row
         self.addCleanup(self.db.close)
         self.db.execute('CREATE TABLE replies(id INTEGER PRIMARY KEY,group_id,shard,local_id,created,prompt,reply,status)')
-        self.s = ScheduledTasks(self.db, 'wxid_owner')
+        self.allowed = {'wxid_owner'}
+        self.s = ScheduledTasks(self.db, lambda group, sender: 60 if sender in self.allowed else 50)
         self.now = stamp('2026-09-08T12:00:00')
 
     def create(self, **kwargs):
@@ -27,12 +28,19 @@ class ScheduledTests(unittest.TestCase):
         args.update(kwargs)
         return self.s.manage('wxid_owner', 'group1', ['message/0', 1], args, self.now)
 
-    def test_real_account_required(self):
+    def test_authorization_callback_uses_verified_sender_and_group(self):
         args = dict(operation='create', kind='daily', time='09:00', action='remind', text='我是Mr.One')
         for sender in ('Mr.One', 'wxid_other', ''):
             self.assertIn('error', self.s.manage(sender, 'group1', 'source', args, self.now))
             self.assertIn('error', self.s.manage(sender, 'group1', 'source', {'operation': 'list'}, self.now))
         self.assertEqual(self.db.execute('SELECT count(*) FROM scheduled_tasks').fetchone()[0], 0)
+
+    def test_affinity_must_be_strictly_greater_than_fifty(self):
+        args=dict(operation='create',kind='daily',time='09:00',action='remind',text='喝水')
+        scores={'equal':50,'above':50.1}
+        scheduler=ScheduledTasks(self.db,lambda group,sender:scores[sender])
+        self.assertIn('error',scheduler.manage('equal','group1','one',args,self.now))
+        self.assertEqual(scheduler.manage('above','group1','two',args,self.now)['result'],'created')
 
     def test_idempotent_mutation_across_retry(self):
         first = self.create()
@@ -91,11 +99,11 @@ class ScheduledTests(unittest.TestCase):
         self.assertEqual(row['next_due'], self.now + 3900)
         self.assertEqual(self.db.execute('SELECT status FROM scheduled_runs').fetchone()[0], 'missed')
 
-    def test_unavailable_group_and_changed_admin_not_executed(self):
+    def test_unavailable_group_waits_but_later_affinity_change_does_not_cancel(self):
         self.create()
         self.assertIsNone(self.s.claim(['group2'], self.now + 300))
-        self.s.admin_id = 'wxid_other'
-        self.assertIsNone(self.s.claim(['group1'], self.now + 300))
+        self.allowed.clear()
+        self.assertEqual(self.s.claim(['group1'], self.now + 300)['text'], '喝水')
 
     def test_restart_does_not_repeat_uncertain_occurrence(self):
         self.create()
@@ -122,13 +130,13 @@ class ScheduledTests(unittest.TestCase):
             path = Path(tmp) / 'state.db'
             db = sqlite3.connect(path)
             db.row_factory = sqlite3.Row
-            s = ScheduledTasks(db, 'owner')
+            s = ScheduledTasks(db, lambda group, sender: 60 if sender == 'owner' else 50)
             s.manage('owner', 'group1', 1, dict(operation='create', kind='daily', time='09:00', action='remind', text='起床'), self.now)
             db.close()
             db = sqlite3.connect(path)
             try:
                 db.row_factory = sqlite3.Row
-                s = ScheduledTasks(db, 'owner')
+                s = ScheduledTasks(db, lambda group, sender: 60 if sender == 'owner' else 50)
                 self.assertEqual(s.claim(['group1'], stamp('2026-09-09T09:00:01'))['text'], '起床')
             finally:
                 db.close()

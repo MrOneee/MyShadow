@@ -78,6 +78,37 @@ class MemoryService:
 
     def member(self,sender):return digest(self.config.get('bot_id','default')+'\0'+sender)
 
+    def affinity(self,group,sender):
+        """Return the deterministic relationship score for one conversation scope."""
+        with self.db() as db:
+            row=db.execute('SELECT affinity FROM relationships WHERE scope=? AND member=?',
+                           (self.scope(group),self.member(sender))).fetchone()
+            return float(row['affinity']) if row else 50.0
+
+    def set_affinity(self,group,sender,value,source='operator'):
+        """Set an operator-controlled baseline through the replayable relationship ledger."""
+        if not sender or type(value) not in (int,float) or not 0<=value<=100:
+            raise ValueError('affinity must be a number from 0 to 100')
+        if not isinstance(source,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}',source):
+            raise ValueError('invalid affinity source')
+        now=time.time();scope,member=self.scope(group),self.member(sender)
+        key='operator:'+source
+        with self.db() as db:
+            self._ensure(db,group,sender)
+            db.execute('DELETE FROM relationship_events WHERE scope=? AND member=? AND source=?',(scope,member,key))
+            self._rebuild(db,scope,member,now)
+            current=self.affinity_from(db,scope,member)
+            db.execute('INSERT INTO relationship_events(scope,member,source,day,familiarity,affinity,kind,evidence,created,reducer_version) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       (scope,member,key,datetime.fromtimestamp(now,TZ).date().isoformat(),0,value-current,
+                        'operator_set','[]',now,REL_VERSION))
+            self._rebuild(db,scope,member,now)
+            return self.affinity_from(db,scope,member)
+
+    @staticmethod
+    def affinity_from(db,scope,member):
+        row=db.execute('SELECT affinity FROM relationships WHERE scope=? AND member=?',(scope,member)).fetchone()
+        return float(row['affinity']) if row else 50.0
+
     def _ensure(self,db,group,sender):
         scope,member=self.scope(group),self.member(sender)
         profiles.register(db,scope,member,group==sender)

@@ -37,7 +37,7 @@
 
 ## 配置
 
-`bot.json`新增 `group_workers: 2`，以及 `activities: {"enabled": true, "skills": ["turtle_soup"], "model": "deepseek-v4-pro"}`。管理员沿用现有 scheduler.admin_id；普通成员可以开局，只有本局发起人和管理员能结束或换题。
+`bot.json`新增 `group_workers: 2`，以及 `activities: {"enabled": true, "skills": ["turtle_soup"], "model": "deepseek-v4-pro", "admin_ids": []}`。活动管理员与定时任务权限相互独立；普通成员可以开局，只有本局发起人和活动管理员能结束或换题。
 
 ## 诊断与回放
 

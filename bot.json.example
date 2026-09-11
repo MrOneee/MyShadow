@@ -24,11 +24,16 @@
     "skills": [
       "turtle_soup"
     ],
-    "model": "deepseek-v4-pro"
+    "model": "deepseek-v4-pro",
+    "admin_ids": []
   },
   "scheduler": {
     "enabled": false,
-    "admin_id": ""
+    "min_affinity": 50
+  },
+  "member_memory": {
+    "enabled": true,
+    "shadow": false
   },
   "selective_reply": {
     "enabled": false,

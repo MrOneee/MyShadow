@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -11,7 +12,7 @@ TZ = ZoneInfo('Asia/Shanghai')
 
 SCHEDULE_TOOL = {'type': 'function', 'function': {
     'name': 'manage_schedule',
-    'description': '仅当前授权账号管理当前群任务。北京时间。create/update需完整任务；update替换指定任务。按内容或时间修改/取消前先list匹配，多个匹配先澄清。task_id仅内部调用使用，不向用户展示或索要。时间不清先问。list查询，cancel取消。',
+    'description': '仅当前会话中好感度超过门槛的成员管理自己的任务。北京时间。create/update需完整任务；update替换指定任务。按内容或时间修改/取消前先list匹配，多个匹配先澄清。task_id仅内部调用使用，不向用户展示或索要。时间不清先问。list查询，cancel取消。',
     'parameters': {'type': 'object', 'additionalProperties': False,
         'properties': {
             'operation': {'type': 'string', 'enum': ['create', 'list', 'update', 'cancel']},
@@ -81,10 +82,12 @@ def next_due(spec, after):
 
 
 class ScheduledTasks:
-    def __init__(self, state, admin_id):
-        if not isinstance(admin_id, str) or not admin_id.strip():
-            raise ValueError('scheduler.admin_id is required')
-        self.state, self.admin_id = state, admin_id
+    def __init__(self, state, affinity_for, min_affinity=50):
+        if not callable(affinity_for):
+            raise TypeError('scheduler affinity callback is required')
+        if type(min_affinity) not in (int,float) or not 0<=min_affinity<100:
+            raise ValueError('scheduler minimum affinity must be from 0 to below 100')
+        self.state, self.affinity_for, self.min_affinity = state, affinity_for, min_affinity
         state.executescript('''
             CREATE TABLE IF NOT EXISTS scheduled_tasks(
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, group_id TEXT NOT NULL,
@@ -98,12 +101,16 @@ class ScheduledTasks:
                 key TEXT PRIMARY KEY, result TEXT NOT NULL, created INTEGER NOT NULL);
         ''')
 
-    def authorized(self, sender):
-        return sender == self.admin_id
+    def authorized(self, sender, group):
+        try:
+            score=self.affinity_for(group,sender)
+            return type(score) in (int,float) and score>self.min_affinity
+        except (OSError, ValueError, TypeError, sqlite3.Error):
+            return False
 
     def manage(self, sender, group, source, args, now=None):
-        if not self.authorized(sender):
-            return {'error': '只有绑定的Mr.One账号可以管理任务'}
+        if not self.authorized(sender, group):
+            return {'error': '当前会话好感度需要超过'+format(self.min_affinity,'g')+'才能管理定时任务'}
         now = int(time.time() if now is None else now)
         if not isinstance(args, dict) or set(args) - set(SCHEDULE_TOOL['function']['parameters']['properties']):
             return {'error': '无效参数'}
@@ -171,7 +178,7 @@ class ScheduledTasks:
         now = int(time.time() if now is None else now)
         with self.state:
             for row in self.state.execute("SELECT * FROM scheduled_tasks WHERE status='active' AND next_due<=? ORDER BY next_due LIMIT 20", (now,)).fetchall():
-                if row['group_id'] not in groups or row['owner'] != self.admin_id:
+                if row['group_id'] not in groups:
                     continue
                 due = row['next_due']
                 following = next_due(json.loads(row['spec']), now)

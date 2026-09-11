@@ -262,5 +262,14 @@ class MemberMemoryTests(unittest.TestCase):
         self.assertEqual(self.rows('relationships')[0]['affinity'],51)
         self.assertEqual(self.rows('relationships')[0]['familiarity'],2)
 
+    def test_operator_affinity_is_scoped_replayable_and_exact(self):
+        self.assertEqual(self.store.affinity(self.group,self.sender),50)
+        self.assertEqual(self.store.set_affinity(self.group,self.sender,60,'lab-roster'),60)
+        self.assertEqual(self.store.affinity(self.group,self.sender),60)
+        self.assertEqual(self.store.affinity('other-group',self.sender),50)
+        self.assertEqual(self.store.set_affinity(self.group,self.sender,60,'lab-roster'),60)
+        rows=[r for r in self.rows('relationship_events') if r['source']=='operator:lab-roster']
+        self.assertEqual(len(rows),1)
+
 
 if __name__=='__main__':unittest.main()

@@ -17,7 +17,7 @@
 | 阶段 | 初识；熟悉中（熟悉度 ≥20 且 ≥3 个活跃日）；熟人（≥50 且 ≥10 日）；老朋友（≥80 且 ≥20 日） |
 | 最近摩擦 | 48 小时内减少调侃；明确和解可解除。长时间不来聊天不扣分、不催促用户 |
 
-模型只收到自然语言关系简报，不收到数值。例如“熟悉中、友好自然、近期平稳”。好感达到 60 时允许更轻松地接梗，低于 40 时更注意分寸。事实准确性、帮助质量、管理员权限不受好感影响。明确边界始终优先。
+模型只收到自然语言关系简报，不收到数值。例如“熟悉中、友好自然、近期平稳”。好感达到 60 时允许更轻松地接梗，低于 40 时更注意分寸。事实准确性和帮助质量不受好感影响；定时任务管理由宿主按当前会话分数独立授权，模型只知道工具是否开放。明确边界始终优先。
 
 参与决策消费同一份简报；熟悉程度不直接换算成发送概率或增加配额。仍需结合实际话题决定是否接话。没有增加主动私聊功能。
 
@@ -71,6 +71,12 @@ SQLite WAL 持久化在 `member-memory/memory.sqlite3`；无全量画像常驻�
 
 ```bash
 docker exec shadow-desktop-1 /opt/weixin-venv/bin/python /bot/scripts/member_memory_admin.py
+```
+
+运维人员可为指定成员设置当前会话的好感基线，调整会写入可重放的关系事件账本，而不是只改汇总行：
+
+```bash
+docker exec shadow-desktop-1 /opt/weixin-venv/bin/python /bot/scripts/member_memory_admin.py --group GROUP_ID --member MEMBER_ID --set-affinity 60 --source initial-roster
 ```
 
 提供 `--group '<会话ID>' --member '<成员ID>'` 可查看该范围的关系数值与画像；加 `--evidence` 查看近期计算证据。这是服务器命令，不是给聊天模型的工具。不要把带私人内容的输出公开分享。
