@@ -98,6 +98,16 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'read-only'):
             e.run([],mode='ptc',tools=[{'name':'send_sticker','parameters':obj({})}])
         with self.assertRaises(ValueError):e.run([],mode='invented')
+
+    def test_read_url_is_a_readonly_native_and_ptc_capability(self):
+        results=[]
+        def script(runtime,n):
+            results.append(runtime.post({'name':'read_url','args':{'url':'https://example.com/a'}}))
+        tool={'name':'read_url','parameters':obj({'url':{'type':'string'}})}
+        engine=self.engine(script)
+        for mode in ('native','ptc'):
+            engine.research([],mode=mode,tools=[tool],handler=lambda name,args:{'status':'ok','url':args['url']})
+        self.assertEqual(results,[{'status':'ok','url':'https://example.com/a'}]*2)
     def test_material_routing_uses_current_request_only(self):
         from agent_runtime.research import material_request
         def request(s):return material_request([{'role':'user','content':'当前提问者：甲\n当前提问：'+s}])

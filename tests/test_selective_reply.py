@@ -240,6 +240,13 @@ class ParticipationParsingTests(unittest.TestCase):
         self.assertIsNone(conversation_text(self.row('image',kind=3),'alice','bot',decode,message_xml))
         self.assertIsNone(conversation_text(self.row('<msg><appmsg><type>5</type></appmsg></msg>',kind=49),'alice','bot',decode,message_xml))
 
+    def test_valid_share_card_becomes_a_selective_reply_candidate(self):
+        row=self.row('<msg><appmsg><type>5</type><title>一篇文章</title><des>简介</des>'
+                     '<url>https://example.com/a</url></appmsg></msg>',kind=49)
+        text,reference=conversation_text(row,'alice','bot',decode,message_xml)
+        self.assertEqual(reference,0)
+        self.assertEqual(text,'[链接分享] 一篇文章\n简介：简介\nhttps://example.com/a')
+
 
 if __name__ == '__main__':
     unittest.main()

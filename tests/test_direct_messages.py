@@ -83,6 +83,13 @@ class DirectMessagesTests(unittest.TestCase):
         self.assertEqual([r[0] for r in self.bot.state.execute('SELECT prompt FROM replies ORDER BY id')],
                          ['你怎么看','请看看这张图片。'])
 
+    def test_private_share_card_becomes_a_read_request_without_mention(self):
+        self.incoming('wxid_a','<msg><appmsg><type>5</type><title>公众号文章</title>'
+                      '<url>https://mp.weixin.qq.com/s?a=1</url></appmsg></msg>',kind=49)
+        self.bot.poll()
+        self.assertEqual(self.bot.state.execute('SELECT prompt FROM replies').fetchone()[0],
+                         '请阅读这个分享链接：公众号文章\nhttps://mp.weixin.qq.com/s?a=1')
+
     def test_private_system_context_is_explicit(self):
         self.bot.config['system_prompt']='你的名字是影。'
         self.assertIn('一对一私聊',self.bot.system_prompt_for('wxid_a'))

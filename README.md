@@ -170,6 +170,12 @@ cat bot-health.json
 
 接口依据：[DeepSeek Responses API 文档](https://api-docs.deepseek.com/guides/responses_api/)。该接口支持服务端搜索，但忽略 `max_tool_calls`、`search_context_size`，因此代码没有把这些参数当作限额保障。
 
+## 链接内容读取
+
+微信网页分享卡片会解析为标题、简介和规范化 URL，进入当前会话上下文；私聊中的分享卡片直接形成阅读请求，群聊中的分享交给现有参与决策。回复模型仅在当前提问或近期会话确实含有 URL 时获得 `read_url(url)`，详情见[链接内容读取](docs/LINK_READING.md)。
+
+读取器只接受公网 HTTP/HTTPS 默认端口，每次回复最多读取两个已经出现在会话中的链接。每次 DNS 解析后固定连接到校验过的公网地址，每一跳都重新校验，最多四次跳转；不携带 Cookie、不登录、不提交表单。响应限 1 MiB，只接受 HTML、XHTML 和纯文本，提取后的正文限 10000 字符并作为不可信外部资料交给模型。`link_reader_enabled=false`可关闭，默认启用。
+
 ## 数据库读取与内存
 
 免 @ 的选择性接话支持按群开启：明确叫名字、引用机器人回复可直接进入回复队列；短期追问和面向全群的求助按规则与轻量模型判断是否参与。仍使用原来的 3 秒轮询。配置、消息合并、主动接话间隔和局限见 [选择性回复](docs/SELECTIVE_REPLY.md)。

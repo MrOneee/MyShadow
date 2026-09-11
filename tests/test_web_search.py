@@ -175,6 +175,31 @@ class SearchToolTests(unittest.TestCase):
         self.ai.complete.assert_not_called()
         self.assertEqual(bot.state.execute('SELECT status FROM replies').fetchone()[0], 'preview')
 
+    def test_bot_offers_bound_read_url_for_conversation_link(self):
+        bot = Bot.__new__(Bot)
+        bot.ai, bot.search = self.ai, self.search
+        bot.link_reader = Mock()
+        link_handler = Mock(return_value={'status': 'ok'})
+        bot.link_reader.handler.return_value = link_handler
+        bot.config = {'mode': 'preview', 'max_age_seconds': 300}
+        bot.require_group = Mock()
+        messages = [{'role': 'system', 'content': '规则'},
+                    {'role': 'user', 'content': '看看 https://example.com/a'}]
+        bot.messages_for = Mock(return_value=(messages, 1))
+        bot.state = sqlite3.connect(':memory:')
+        self.addCleanup(bot.state.close)
+        bot.state.row_factory = sqlite3.Row
+        bot.state.execute('CREATE TABLE replies(id INTEGER, group_id TEXT, created INTEGER, prompt TEXT, reply TEXT, status TEXT)')
+        bot.state.execute('INSERT INTO replies VALUES(1,?,?,?,?,?)', ('g', int(time.time()), '看看链接', '', 'pending'))
+        def complete(*args, **kwargs):
+            self.assertIn('read_url', [tool['function']['name'] for tool in kwargs['extra_tools']])
+            self.assertEqual(kwargs['tool_handler']('read_url', {'url': 'https://example.com/a'}), {'status': 'ok'})
+            return '读完了', {'total_tokens': 20}
+        with patch('myshadow.bot.chat_complete', side_effect=complete):
+            bot.process_group('g')
+        bot.link_reader.handler.assert_called_once_with(['https://example.com/a'])
+        link_handler.assert_called_once_with({'url': 'https://example.com/a'})
+
 
 class BoundedRequestTests(unittest.TestCase):
     def test_response_read_is_bounded_and_closed(self):

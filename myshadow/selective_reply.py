@@ -3,6 +3,7 @@ import json
 import re
 import time
 from .participation_decision import ParticipationDecision
+from .shared_links import shared_link_text
 
 
 def addressed(text, aliases):
@@ -27,10 +28,13 @@ def conversation_text(row, sender, bot_id, decode, message_xml):
         reference = 0
         if kind == 49:
             xml = message_xml(text)
-            if xml.findtext('./appmsg/type') != '57':
-                return None
-            text = xml.findtext('./appmsg/title') or ''
-            reference = int(xml.findtext('./appmsg/refermsg/svrid') or '0')
+            if xml.findtext('./appmsg/type') == '57':
+                text = xml.findtext('./appmsg/title') or ''
+                reference = int(xml.findtext('./appmsg/refermsg/svrid') or '0')
+            else:
+                text = shared_link_text(text)
+                if not text:
+                    return None
         return text.strip()[:2000], reference
     except Exception:
         return None

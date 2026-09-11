@@ -101,7 +101,7 @@ class DshEngine:
     def research(self,messages,**kwargs):
         """Shared read-only path for skills and material-analysis chat requests."""
         kwargs.setdefault('mode',self.config.get('research_mode','native'))
-        allowed={'web_search','web_fetch','search_history','search_background','recall_memory'}
+        allowed={'web_search','web_fetch','read_url','search_history','search_background','recall_memory'}
         for tool in kwargs.get('tools',()):
             if tool.get('function',tool)['name'] not in allowed:raise ValueError('Research tools must be read-only')
         return self.run(messages,**kwargs)
@@ -116,7 +116,7 @@ class DshEngine:
         timeout=timeout or self.config.get('turn_timeout_seconds',240)
         limits={'max_steps':max_steps or self.config.get('max_steps',12),'max_tools':self.config.get('max_tool_calls',16)}
         tool_defs=[dict(t.get('function',t)) for t in tools]
-        if mode=='ptc' and any(t['name'] not in ('web_search','web_fetch','search_history','search_background','recall_memory') for t in tool_defs):
+        if mode=='ptc' and any(t['name'] not in ('web_search','web_fetch','read_url','search_history','search_background','recall_memory') for t in tool_defs):
             raise ValueError('PTC only exposes read-only research tools')
         if schema is not None:
             tool_defs.append({'name':'submit_result','description':'提交最终结构化结果；校验失败会返回具体错误，请根据错误修正后再次提交。仅成功提交才算完成。',

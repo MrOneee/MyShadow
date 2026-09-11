@@ -11,6 +11,7 @@ from .group_names import member_names
 from .conversations import direct_id
 from .wechat_db import databases, snapshot
 from .sticker_metadata import sticker_text, sticker_description
+from .shared_links import shared_link
 
 TZ = ZoneInfo('Asia/Shanghai')
 SCAN_LIMIT = 3000
@@ -55,10 +56,14 @@ def text_content(row):
     if kind==49:
         xml=message_xml(text)
         subtype=xml.findtext('./appmsg/type')
-        if subtype in ('5','6','57'):
+        link=shared_link(text)
+        if link:
+            value=link['title']+'\n'+link['url']
+            if link['description']:value+='\n'+link['description']
+            return value,'链接'
+        if subtype in ('6','57'):
             title=xml.findtext('./appmsg/title') or ''
-            if subtype=='5':title+='\n'+(xml.findtext('./appmsg/url') or '')
-            return title,{'5':'链接','6':'文件标题','57':'引用消息正文'}[subtype]
+            return title,{'6':'文件标题','57':'引用消息正文'}[subtype]
     return '', ''
 
 

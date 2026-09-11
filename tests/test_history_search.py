@@ -106,6 +106,14 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(result['text'],'[表情，微信附带描述：哈哈哈]')
         self.assertNotIn('private',json.dumps(result))
 
+    def test_share_card_description_and_normalized_url_are_searchable(self):
+        self.add('<msg><appmsg><type>5</type><title>公众号文章</title><des>内容简介</des>'
+                 '<url>https://mp.weixin.qq.com/s?a=1&amp;b=2</url><secret>hidden</secret></appmsg></msg>',kind=49)
+        result=self.h.query(self.trigger,{'query':'公众号文章'})['messages'][0]
+        self.assertEqual(result['type'],'链接')
+        self.assertIn('https://mp.weixin.qq.com/s?a=1&b=2',result['text'])
+        self.assertNotIn('hidden',json.dumps(result))
+
     def test_literal_keyword_and_excluded_records(self):
         self.add('SQL %_ 和中文',ident=1)
         self.add('其他SQL信息',ident=2)

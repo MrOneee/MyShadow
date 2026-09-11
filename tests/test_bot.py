@@ -46,6 +46,15 @@ class MentionTests(unittest.TestCase):
         self.row['source'] = '<msgsource/>'
         self.assertIsNone(prompt_for(self.row, 'wxid_sender', self.config, 1001))
 
+    def test_shared_link_with_genuine_mention_becomes_read_request(self):
+        self.row['local_type'] = 49
+        self.row['message_content'] = ('wxid_sender:\n<msg><appmsg><type>5</type><title>文章</title>'
+            '<url>https://example.com/a</url></appmsg></msg>')
+        self.assertEqual(prompt_for(self.row, 'wxid_sender', self.config, 1001),
+                         '请阅读这个分享链接：文章\nhttps://example.com/a')
+        self.assertEqual(prompt_for(self.row, 'wxid_sender', self.config, 1001, direct=True),
+                         '请阅读这个分享链接：文章\nhttps://example.com/a')
+
 
 class WALTests(unittest.TestCase):
     def make_wal(self):
@@ -302,6 +311,15 @@ class ContextTests(unittest.TestCase):
             ('wxid_a:\n<msg><emoji desc="Cg4KB2RlZmF1bHQSA+WVig==" cdnurl="private"/></msg>',))
         history, _ = self.bot.context_for(self.trigger)
         self.assertEqual(history[-1]['text'], '[表情，微信附带描述：啊]')
+        self.assertNotIn('private', json.dumps(history))
+
+    def test_recent_share_card_exposes_only_title_description_and_url(self):
+        c = self.connections['message/message_0.db']
+        xml = ('wxid_a:\n<msg><appmsg><type>5</type><title>文章标题</title><des>简介</des>'
+               '<url>https://example.com/a</url><appattach><aeskey>private</aeskey></appattach></appmsg></msg>')
+        c.execute('UPDATE ' + table_for('111@chatroom') + ' SET local_type=49,message_content=? WHERE local_id=15',(xml,))
+        history, _ = self.bot.context_for(self.trigger)
+        self.assertEqual(history[-1]['text'], '[链接分享] 文章标题\n简介：简介\nhttps://example.com/a')
         self.assertNotIn('private', json.dumps(history))
 
     def test_bot_replies_are_included_as_history_data(self):
