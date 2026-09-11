@@ -93,6 +93,41 @@ class ReaderTests(unittest.TestCase):
         self.assertTrue(connection.closed)
         self.assertEqual(connector.call_args.args[1], '93.184.216.34')
 
+    def test_mtgch_article_adapter_reads_same_origin_public_json(self):
+        payload = json.dumps({
+            'id': 585,
+            'title': '现实裂界',
+            'summary': '这是一段文章摘要。',
+            'byline': '作者名',
+            'first_published_at': '2026-09-02T15:00:00Z',
+            'section': {'name': '万智故事'},
+            'body_json': {'type': 'doc', 'content': [
+                {'type': 'paragraph', 'content': [{'type': 'text', 'text': '这是第一段正文，包含足够多的可读文字。'}]},
+                {'type': 'paragraph', 'content': [{'type': 'text', 'text': '这是第二段正文。'}]},
+            ]},
+        }, ensure_ascii=False).encode()
+        connection = FakeConnection(FakeResponse(payload, headers={
+            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Length': str(len(payload)),
+        }))
+        result = UrlReader(public_dns, Mock(return_value=connection)).read('https://mtgch.com/articles/585')
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['title'], '现实裂界')
+        self.assertIn('作者：作者名', result['content'])
+        self.assertIn('第一段正文', result['content'])
+        self.assertEqual(result['source_url'], 'https://mtgch.com/articles/585')
+        self.assertEqual(connection.requests[0][1], '/api/v1/articles/585')
+        self.assertEqual(connection.requests[0][2]['Accept'], 'application/json')
+
+    def test_reports_dynamic_shell_as_no_readable_content(self):
+        body = b'<html><head><title>SPA</title></head><body><div id="app"></div><script>load()</script></body></html>'
+        response = FakeResponse(body, headers={'Content-Type': 'text/html'})
+        result = UrlReader(public_dns, Mock(return_value=FakeConnection(response)), adapters=[]).read(
+            'https://example.com/app')
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['error'], 'no_readable_content')
+        self.assertIn('JavaScript', result['message'])
+
     def test_private_or_mixed_dns_answers_are_rejected(self):
         def private_dns(host, port, type=0):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', port))]
