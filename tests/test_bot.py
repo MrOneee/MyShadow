@@ -296,6 +296,14 @@ class ContextTests(unittest.TestCase):
         self.assertNotIn('PRIVATE_IMAGE_XML', json.dumps(history))
         self.assertNotIn('SYSTEM-NOTICE', json.dumps(history))
 
+    def test_recent_sticker_uses_weak_wechat_description(self):
+        c = self.connections['message/message_0.db']
+        c.execute('UPDATE ' + table_for('111@chatroom') + ' SET local_type=47,message_content=? WHERE local_id=15',
+            ('wxid_a:\n<msg><emoji desc="Cg4KB2RlZmF1bHQSA+WVig==" cdnurl="private"/></msg>',))
+        history, _ = self.bot.context_for(self.trigger)
+        self.assertEqual(history[-1]['text'], '[表情，微信附带描述：啊]')
+        self.assertNotIn('private', json.dumps(history))
+
     def test_bot_replies_are_included_as_history_data(self):
         history, _ = self.bot.context_for(self.trigger)
         self.assertTrue(any(m['speaker_type'] == 'assistant' and m['sender'] == 'ai-dlc' for m in history))

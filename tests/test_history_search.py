@@ -99,6 +99,13 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(result['sender'],'小李')
         self.assertEqual(result['text'],'我不同意这个方案')
 
+    def test_sticker_description_is_searchable_weak_metadata(self):
+        self.add('<msg><emoji desc="ChIKBXpoX2NuEgnlk4jlk4jlk4gKCQoFemhfdHcSAAoLCgdkZWZhdWx0EgA=" cdnurl="private"/></msg>',kind=47)
+        result=self.h.query(self.trigger,{'query':'哈哈哈'})['messages'][0]
+        self.assertEqual(result['type'],'表情描述')
+        self.assertEqual(result['text'],'[表情，微信附带描述：哈哈哈]')
+        self.assertNotIn('private',json.dumps(result))
+
     def test_literal_keyword_and_excluded_records(self):
         self.add('SQL %_ 和中文',ident=1)
         self.add('其他SQL信息',ident=2)
