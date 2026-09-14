@@ -137,6 +137,25 @@ class RoutingTests(unittest.TestCase):
             self.bot.send(2)
         self.bot.ui.assert_not_called()
 
+    def test_multiple_bubbles_are_sent_and_confirmed_in_order(self):
+        self.bot.state.execute("UPDATE replies SET reply='行<|next_bubble|>我看看' WHERE id=2")
+        self.bot.confirm_bubble=Mock(return_value=True)
+        self.bot.delivery_matches=Mock(return_value=[])
+        self.bot.send(2)
+        sends=[call.kwargs['text'] for call in self.bot.ui.call_args_list if call.args[0]=='send']
+        self.assertEqual(sends,['行','我看看'])
+        self.assertEqual(self.bot.confirm_bubble.call_count,2)
+        self.assertEqual(self.bot.state.execute('SELECT status FROM replies WHERE id=2').fetchone()[0],'confirmed')
+
+    def test_multiple_bubbles_stop_after_uncertain_delivery(self):
+        self.bot.state.execute("UPDATE replies SET reply='第一条<|next_bubble|>第二条' WHERE id=2")
+        self.bot.confirm_bubble=Mock(return_value=False)
+        self.bot.delivery_matches=Mock(return_value=[])
+        self.bot.send(2)
+        sends=[call.kwargs['text'] for call in self.bot.ui.call_args_list if call.args[0]=='send']
+        self.assertEqual(sends,['第一条'])
+        self.assertEqual(self.bot.state.execute('SELECT status FROM replies WHERE id=2').fetchone()[0],'delivery_uncertain')
+
     def test_duplicate_group_id_rejected(self):
         self.bot.config['groups'].append({'group_id': '111@chatroom', 'group_name': 'Three'})
         with self.assertRaises(ValueError):

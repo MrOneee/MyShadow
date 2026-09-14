@@ -48,5 +48,106 @@
       "max_decisions_per_hour": 60,
       "proactive_daily_limit": 1
     }
-  }
+  },
+  "persona_policy_file": "personas/shared.md",
+  "default_persona": "creator",
+  "persona_profiles": {
+    "creator": {
+      "name": "影",
+      "aliases": [
+        "影"
+      ],
+      "identity_file": "personas/creator.identity.md",
+      "voice_file": "personas/voices/creator.md",
+      "background": "knowledge/creator",
+      "style": {
+        "casual_target_chars": "4到15字",
+        "split_probability": 0.44,
+        "three_bubble_probability": 0.36,
+        "natural_markers": [
+          "好",
+          "行",
+          "可以",
+          "感觉",
+          "我觉得",
+          "可能",
+          "确实",
+          "有点",
+          "不是",
+          "但是"
+        ],
+        "sticker_probability": 0.12,
+        "sticker_intents": [
+          "旺柴",
+          "拥抱",
+          "吃瓜",
+          "流泪",
+          "裂开",
+          "让我看看",
+          "捂脸"
+        ]
+      }
+    },
+    "laoying": {
+      "name": "牢影",
+      "aliases": [
+        "牢影",
+        "影",
+        "道长"
+      ],
+      "identity_file": "personas/laoying.identity.md",
+      "voice_file": "personas/voices/laoying.md",
+      "background": "knowledge/laoying",
+      "style": {
+        "casual_target_chars": "8到40字",
+        "split_probability": 0.12,
+        "three_bubble_probability": 0.05,
+        "natural_markers": [
+          "得",
+          "行吧",
+          "别急",
+          "这事儿"
+        ],
+        "sticker_probability": 0.08,
+        "sticker_intents": [
+          "无奈",
+          "摊手",
+          "摸鱼",
+          "喝茶"
+        ]
+      }
+    },
+    "jiangcheng": {
+      "name": "蒋丞",
+      "aliases": [
+        "蒋丞",
+        "丞哥",
+        "丞丞",
+        "猫丞丞"
+      ],
+      "identity_file": "personas/jiangcheng.identity.md",
+      "voice_file": "personas/voices/jiangcheng.md",
+      "background": "knowledge/jiangcheng",
+      "context_token_budget": 20000,
+      "style": {
+        "casual_target_chars": "6到35字",
+        "split_probability": 0.18,
+        "three_bubble_probability": 0.06,
+        "natural_markers": [
+          "行",
+          "不是",
+          "你这……",
+          "我想想"
+        ],
+        "sticker_probability": 0.09,
+        "sticker_intents": [
+          "无语",
+          "服了",
+          "得意",
+          "摊手"
+        ]
+      }
+    }
+  },
+  "group_personas": {}
 }

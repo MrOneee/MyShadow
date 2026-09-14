@@ -12,7 +12,7 @@ from PIL import Image
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from myshadow.ai_client import AIClient
-from myshadow.image_context import ImageContext, ImageUnavailable, decode_dat, normalize_image
+from myshadow.image_context import ImageContext, ImageUnavailable, decode_dat, normalize_image, READ_IMAGE_TOOL
 from tests import test_bot
 from myshadow.bot import table_for
 
@@ -67,6 +67,15 @@ class ModelRoutingTests(unittest.TestCase):
         self.assertNotIn('image_url', json.dumps(text))
         self.assertEqual(ai.config['model'], 'deepseek-v4-flash')
 
+    def test_targeted_image_question_stays_inside_vision_request(self):
+        ai=AIClient.__new__(AIClient);ai.config={'model':'text','vision_model':'vision'}
+        ai.request=Mock(return_value={'choices':[{'message':{'content':'第二列是金额'}}]})
+        ai.describe_image(sample_image(),'image/jpeg','表格第二列是什么')
+        payload=ai.request.call_args.args[1]
+        self.assertEqual(payload['model'],'vision')
+        self.assertIn('表格第二列是什么',json.dumps(payload,ensure_ascii=False))
+        self.assertEqual(READ_IMAGE_TOOL['function']['name'],'read_image')
+
 
 class ImageStorageTests(unittest.TestCase):
     def setUp(self):
@@ -106,6 +115,14 @@ class ImageStorageTests(unittest.TestCase):
         self.assertEqual(self.images.keys(self.account, data), (key, 123456 & 255))
         with self.assertRaises(ImageUnavailable):
             self.images.keys(self.account, encrypted_image(sample_image()))
+
+    def test_targeted_analysis_is_not_stored_as_generic_cache(self):
+        group='111@chatroom';folder=self.account/'msg/attach'/hashlib.md5(group.encode()).hexdigest()/'2026-09/Img'
+        folder.mkdir(parents=True);(folder/('a'*32+'.dat')).write_bytes(sample_image())
+        self.ai.describe_image.return_value=('这是红色',{})
+        self.assertEqual(self.images.analyze(self.account,group,'message/0',self.item,'什么颜色'),'这是红色')
+        self.assertIsNone(self.images.cached(group,'message/0',1))
+        self.assertEqual(self.ai.describe_image.call_args.args[2],'什么颜色')
 
 
 class ImageSelectionTests(unittest.TestCase):
@@ -183,6 +200,22 @@ class ImageSelectionTests(unittest.TestCase):
         self.set_reference('wxid_a', 13, '222@chatroom')
         self.assertIn('不属于当前群', self.bot.image_context_for(self.fixture.trigger))
         self.bot.images.describe.assert_not_called()
+
+    def test_read_image_tool_is_bound_to_numbered_current_candidates(self):
+        self.bot.images.analyze.return_value='图里写着连接失败'
+        handler=self.bot.image_tool_handler(self.fixture.trigger)
+        result=handler({'image_number':1,'question':'报错是什么'})
+        self.assertEqual((result['status'],result['image_number'],result['content']),
+                         ('ok',1,'图里写着连接失败'))
+        args=self.bot.images.analyze.call_args.args
+        self.assertEqual((args[1],args[3]['local_id'],args[4]),('111@chatroom',13,'报错是什么'))
+        self.assertEqual(handler({'group_id':'222@chatroom','image_number':1})['status'],'failed')
+
+    def test_read_image_tool_reports_empty_without_guessing(self):
+        self.c.execute('UPDATE '+self.t+' SET local_type=1 WHERE local_id IN (13,15,21)')
+        result=self.bot.image_tool_handler(self.fixture.trigger)({'question':'看到了什么'})
+        self.assertEqual(result['status'],'empty')
+        self.bot.images.analyze.assert_not_called()
 
 
 if __name__ == '__main__':

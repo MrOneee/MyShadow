@@ -73,6 +73,14 @@ class BackgroundTests(unittest.TestCase):
         self.config['group_personas']['123@chatroom']['background']='../escape'
         with self.assertRaises(ValueError):BackgroundKnowledge(self.root,self.config)
 
+    def test_default_named_profile_background_applies_to_unbound_conversations(self):
+        cfg={'default_persona':'self','persona_profiles':{'self':{
+            'name':'影','aliases':['影'],'prompt_file':'persona.md','background':'knowledge'}}}
+        profiles=load_personas(cfg,self.root)
+        knowledge=BackgroundKnowledge(self.root,cfg,profiles)
+        self.assertTrue(knowledge.enabled('a-private-contact'))
+        self.assertEqual(knowledge.search('a-private-contact',{'query':'顾飞'})['cards'][0]['record_id'],'person-gu')
+
     def test_readonly_material_route_keeps_background_tool(self):
         from agent_runtime.ai import complete_chat
         ai=Mock(config={});ai.harness.research.return_value=Mock(text='结果',usage={})

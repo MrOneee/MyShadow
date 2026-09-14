@@ -29,6 +29,8 @@ image-*.json
 compose.yaml.before-*
 # Generated from a locally supplied source text; keep source-derived cards private.
 knowledge/jiangcheng/
+# Derived from the creator's private chat archive; deploy privately, never publish.
+knowledge/creator/
 # Generated verification artifacts can contain environment-specific metadata.
 docs/*evaluation*.json
 docs/*deployment*.json

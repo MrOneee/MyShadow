@@ -86,6 +86,38 @@ class PersonaTests(unittest.TestCase):
             cfg={'group_personas':{A:{'name':'a','prompt_file':'../outside.md'}}}
             with self.assertRaises(ValueError):load_personas(cfg,Path(d))
 
+    def test_named_profiles_share_assembly_and_switch_by_id(self):
+        root=Path(__file__).resolve().parents[1]
+        cfg={'context_token_budget':12800,'persona_policy_file':'personas/shared.md',
+             'default_persona':'creator','persona_profiles':{
+                 'creator':{'name':'影','aliases':['影'],'identity_file':'personas/creator.identity.md',
+                            'voice_file':'personas/voices/creator.md','background':'knowledge/creator'},
+                 'jiangcheng':{'name':'蒋丞','aliases':['丞哥'],'identity_file':'personas/jiangcheng.identity.md',
+                               'voice_file':'personas/voices/jiangcheng.md','background':'knowledge/jiangcheng'}},
+             'group_personas':{B:{'persona_id':'jiangcheng','context_token_budget':20000}}}
+        profiles=load_personas(cfg,root)
+        fallback=self.bot.__class__.__new__(self.bot.__class__)
+        fallback.config=cfg;fallback.personas=profiles
+        default=fallback.persona_for('private-contact')
+        selected=fallback.persona_for(B)
+        self.assertEqual((default['persona_id'],default['name']),('creator','影'))
+        self.assertEqual((selected['persona_id'],selected['name']),('jiangcheng','蒋丞'))
+        self.assertIn('共同能力与边界',default['system_prompt'])
+        self.assertIn('共同能力与边界',selected['system_prompt'])
+        self.assertEqual(selected['context_token_budget'],20000)
+        self.assertNotIn('创建者在数字空间',selected['system_prompt'])
+
+    def test_unknown_named_profile_is_rejected(self):
+        cfg={'group_personas':{A:{'persona_id':'missing'}},'persona_profiles':{}}
+        with self.assertRaisesRegex(ValueError,'Unknown group persona'):
+            load_personas(cfg,Path(__file__).resolve().parents[1])
+
+    def test_invalid_style_probability_is_rejected(self):
+        cfg={'default_persona':'bad','persona_profiles':{'bad':{
+            'name':'影','prompt_file':'persona.txt','style':{'split_probability':1.2}}}}
+        with self.assertRaisesRegex(ValueError,'style probability'):
+            load_personas(cfg,Path(__file__).resolve().parents[1])
+
     def test_activity_host_and_commands_use_current_group_identity(self):
         import sys
         from activity_runtime.registry import Registry

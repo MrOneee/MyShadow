@@ -18,6 +18,16 @@ from PIL import Image
 
 
 MAX_BYTES = 12 * 1024 * 1024
+READ_IMAGE_OUTPUT = {'type':'object','properties':{
+    'status':{'type':'string'},'message':{'type':'string'},'image_number':{'type':'integer'},
+    'available_count':{'type':'integer'},'content':{'type':'string'}},'additionalProperties':False}
+READ_IMAGE_TOOL = {'type':'function','function':{
+    'name':'read_image',
+    'description':'读取当前提问绑定的图片。可读当前发送、当前引用，或当前提问者两分钟内发送的最近图片；编号按从旧到新。不能读取路径、网址、其他群或任意消息。',
+    'parameters':{'type':'object','properties':{
+        'image_number':{'type':'integer','minimum':1,'maximum':3,'description':'图片编号。只有一张时可省略；多张时根据工具返回的数量指定。'},
+        'question':{'type':'string','maxLength':200,'description':'希望重点识别的问题，例如“表格第二列是什么”或“这张图哪里报错”。'}},
+        'additionalProperties':False}}}
 
 
 class ImageUnavailable(RuntimeError):
@@ -146,10 +156,7 @@ class ImageContext:
                 if path.is_file() and path.resolve().is_relative_to(account.resolve()):
                     yield path
 
-    def describe(self, account, group_id, shard, item):
-        cached = self.cached(group_id, shard, item['local_id'])
-        if cached:
-            return cached
+    def normalized(self, account, group_id, item):
         last_error = ImageUnavailable('这张图片还没有下载到本机')
         for path in self.paths(account, group_id, item):
             try:
@@ -162,13 +169,31 @@ class ImageContext:
             except (ImageUnavailable, OSError) as exc:
                 last_error = exc
                 continue
-            summary, _ = self.ai.describe_image(image, mime)
-            if path.stem.endswith('_t'):
-                summary = '（依据缩略图，细节可能不清晰）' + summary
-            with self.state:
-                self.state.execute('INSERT OR REPLACE INTO image_memory VALUES(?,?,?,?,?)',
-                    (group_id, shard, item['local_id'], hashlib.sha256(image).hexdigest(), summary))
-            return summary
+            return image,mime,path.stem.endswith('_t')
         if isinstance(last_error, ImageUnavailable):
             raise last_error
         raise ImageUnavailable('本机图片暂时无法读取') from None
+
+    def describe(self, account, group_id, shard, item):
+        cached = self.cached(group_id, shard, item['local_id'])
+        if cached:
+            return cached
+        image,mime,thumbnail = self.normalized(account,group_id,item)
+        summary, _ = self.ai.describe_image(image, mime)
+        if thumbnail:
+            summary = '（依据缩略图，细节可能不清晰）' + summary
+        with self.state:
+            self.state.execute('INSERT OR REPLACE INTO image_memory VALUES(?,?,?,?,?)',
+                (group_id, shard, item['local_id'], hashlib.sha256(image).hexdigest(), summary))
+        return summary
+
+    def analyze(self, account, group_id, shard, item, question=''):
+        if not isinstance(question,str) or len(question)>200:
+            raise ValueError('图片问题必须是200字以内的文本')
+        if not question.strip():
+            return self.describe(account,group_id,shard,item)
+        image,mime,thumbnail=self.normalized(account,group_id,item)
+        summary,_=self.ai.describe_image(image,mime,question.strip())
+        if thumbnail:
+            summary='（依据缩略图，细节可能不清晰）'+summary
+        return summary

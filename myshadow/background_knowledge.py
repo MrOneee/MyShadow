@@ -5,6 +5,8 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+DEFAULT_PROFILE = '__default__'
+
 BACKGROUND_OUTPUT = {'type':'object','properties':{
     'status':{'type':'string'},'error':{'type':'string'},'partial':{'type':'boolean'},
     'more_matches':{'type':'boolean'},'cards':{'type':'array','items':{'type':'object',
@@ -50,29 +52,41 @@ def build_index(directory):
 
 
 class BackgroundKnowledge:
-    def __init__(self,root,config):
+    def __init__(self,root,config,profiles=None):
         self.scopes={}
         root=Path(root).resolve()
-        for group,entry in config.get('group_personas',{}).items():
-            if not entry.get('background'):continue
+        if profiles is None:
+            entries={group:entry for group,entry in config.get('group_personas',{}).items()
+                     if isinstance(entry,dict) and entry.get('background')}
+        else:
+            entries={group:profile for group,profile in profiles.items() if profile.get('background')}
+        resources={}
+        for group,entry in entries.items():
             directory=(root/entry['background']).resolve()
             if not directory.is_relative_to(root):raise ValueError('Background directory escaped root')
-            index=(directory/'index.sqlite').resolve()
-            if not index.is_relative_to(root) or not index.is_file():raise ValueError('Background index unavailable')
-            aliases=json.loads((directory/'aliases.json').read_text(encoding='utf-8'))
-            if not isinstance(aliases,dict) or not all(isinstance(k,str) and len(k)>=2 and isinstance(v,str) for k,v in aliases.items()):
-                raise ValueError('Invalid background aliases')
-            self.scopes[group]=(index,aliases)
+            key=str(directory)
+            if key not in resources:
+                index=(directory/'index.sqlite').resolve()
+                if not index.is_relative_to(root) or not index.is_file():raise ValueError('Background index unavailable')
+                aliases=json.loads((directory/'aliases.json').read_text(encoding='utf-8'))
+                if not isinstance(aliases,dict) or not all(isinstance(k,str) and len(k)>=2 and isinstance(v,str) for k,v in aliases.items()):
+                    raise ValueError('Invalid background aliases')
+                resources[key]=(index,aliases)
+            self.scopes[group]=resources[key]
 
-    def enabled(self,group):return group in self.scopes
+    def _scope(self,group):
+        return self.scopes.get(group) or self.scopes.get(DEFAULT_PROFILE)
+
+    def enabled(self,group):return self._scope(group) is not None
 
     def search(self,group,args,*,max_chars=2600):
-        if group not in self.scopes:return {'status':'unavailable','cards':[]}
+        scope=self._scope(group)
+        if scope is None:return {'status':'unavailable','cards':[]}
         if not isinstance(args,dict) or set(args)-{'query','limit'}:return {'error':'只能查询当前背景，不接受路径或群标识。'}
         query=args.get('query');limit=args.get('limit',4)
         if not isinstance(query,str) or not 1<=len(query.strip())<=100 or type(limit) is not int or not 1<=limit<=4:
             return {'error':'请用100字以内的关键词查询，每次最多4条。'}
-        index,aliases=self.scopes[group]
+        index,aliases=scope
         people=list(dict.fromkeys(v for k,v in aliases.items() if k in query))
         expanded=query+' '+ ' '.join(people)
         terms=tokens(expanded)[:70]
@@ -110,9 +124,10 @@ class BackgroundKnowledge:
             return {'status':'failed','error':'背景记忆暂时未能读取，不能解释为没有这段经历。'}
 
     def automatic(self,group,text):
-        if group not in self.scopes:return ''
+        scope=self._scope(group)
+        if scope is None:return ''
         # At most two cards; avoid attaching identity lore to unrelated conversation.
-        names=list(dict.fromkeys(v for k,v in self.scopes[group][1].items() if k in text))
+        names=list(dict.fromkeys(v for k,v in scope[1].items() if k in text))
         if not names:return ''
         result=self.search(group,{'query':(' '.join(names)+' '+text)[:100],'limit':2},max_chars=1000)
         people_cards=[c for c in result.get('cards',[]) if c['kind']=='person']
