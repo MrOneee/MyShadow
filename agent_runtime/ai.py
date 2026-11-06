@@ -29,7 +29,7 @@ def complete_chat(ai,messages,weather,extra_tools,tool_handler,search):
     from myshadow.member_memory_policy import OUTPUT as MEMORY_OUTPUT
     from myshadow.url_reader import LINK_OUTPUT
     tools=([WEATHER_TOOL] if weather else [])+list(extra_tools)
-    research=material_request(messages) and not any(t.get('function',t)['name'] in ('manage_schedule','manage_memory') for t in tools)
+    research=material_request(messages) and not any(t.get('function',t)['name'] in ('manage_schedule','manage_memory','manage_meme') for t in tools)
     if research:
         outputs={'search_history':HISTORY_OUTPUT,'search_background':BACKGROUND_OUTPUT,
                  'recall_memory':MEMORY_OUTPUT,'read_url':LINK_OUTPUT}

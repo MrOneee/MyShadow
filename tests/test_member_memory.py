@@ -216,6 +216,9 @@ class MemberMemoryTests(unittest.TestCase):
         self.assertFalse(self.rows('episode_search'));self.assertTrue(self.rows('facts'))
 
     def test_one_hundred_multiday_trajectories(self):
+        # Keep all three bursts in one Asia/Shanghai calendar day even when
+        # the suite runs near midnight; daily relationship caps use local days.
+        self.clock=(int((self.clock+8*3600)//86400)*86400-8*3600)+12*3600
         # Distinct sessions, replayed deliveries, neutral feedback and burst caps.
         for trajectory in range(100):
             sender='trajectory'+str(trajectory)

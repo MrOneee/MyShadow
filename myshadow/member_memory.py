@@ -13,6 +13,10 @@ from zoneinfo import ZoneInfo
 from .social_memory import SENSITIVE, digest, member_key
 from .member_memory_policy import POLICY, READ_POLICY, command
 from . import member_profiles as profiles
+from . import member_retrieval as retrieval
+from . import member_evidence as evidence_store
+from . import member_selector
+from .member_relationships import relation
 
 TZ=ZoneInfo('Asia/Shanghai')
 SLOTS={'nickname','interest','communication','background','boundary'}
@@ -21,7 +25,8 @@ SHARE_INTENT=r'(?:允许|可以|同意).*(?:其他群|其他会话|跨群|共享
 
 
 class MemoryService:
-    def __init__(self,root,config=None):
+    def __init__(self,root,config=None,reader_factory=None):
+        self.reader_factory=reader_factory
         self.config=config or {};self.base=Path(root);self.root=self.base/'member-memory'
         self.root.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.file=self.root/'memory.sqlite3';self.thread=None;self.stop_event=threading.Event()
@@ -61,6 +66,8 @@ class MemoryService:
             ''')
             db.execute("INSERT OR IGNORE INTO meta VALUES('started',?)",(str(time.time()),))
             profiles.migrate(db)
+            retrieval.migrate(db,self._words)
+            evidence_store.migrate(db)
         self.file.chmod(0o600)
 
     @contextlib.contextmanager
@@ -150,8 +157,21 @@ class MemoryService:
             control=self._ensure(db,group,sender);scope,member=control['scope'],control['member']
             started=float(db.execute("SELECT value FROM meta WHERE key='started'").fetchone()[0])
             if control['disabled'] or created<started or created<=control['since']:return
+            # Old reply IDs were reused. Skip only an exact legacy interaction;
+            # a different date/content with the same numeric ID is a new event.
+            parts=str(source).split(':')
+            if len(parts)==3 and parts[0] in ('reply-v2','activity-v2'):
+                legacy=parts[0].replace('-v2','')+':'+parts[1]
+                same=db.execute('SELECT 1 FROM events WHERE scope=? AND member=? AND source=? AND kind=? AND created=? AND text=? AND assistant=?',
+                    (scope,member,legacy,kind,created,text[:retrieval.USER_LIMIT],assistant[:retrieval.ASSISTANT_LIMIT])).fetchone()
+                if not same:
+                    old_text=retrieval.episode_text({'kind':kind,'text':text[:retrieval.USER_LIMIT],
+                        'assistant':assistant[:retrieval.ASSISTANT_LIMIT]})
+                    same=db.execute('SELECT 1 FROM episodes WHERE scope=? AND member=? AND source=? AND created=? AND text=?',
+                        (scope,member,legacy,created,old_text)).fetchone()
+                if same:return
             db.execute('INSERT OR IGNORE INTO events(scope,member,source,kind,text,assistant,created,received,version) VALUES(?,?,?,?,?,?,?,?,?)',
-                       (scope,member,str(source),kind,text[:1000],assistant[:800],created,time.time(),control['version']))
+                       (scope,member,str(source),kind,text[:retrieval.USER_LIMIT],assistant[:retrieval.ASSISTANT_LIMIT],created,time.time(),control['version']))
 
     @staticmethod
     def _words(text):
@@ -159,7 +179,9 @@ class MemoryService:
         return ' '.join(tokens(text))
 
     def _fact(self,db,scope,member,item,version,now=None,confidence='high'):
-        return profiles.write(db,scope,member,item,version,self._words,now,confidence)
+        ident=profiles.write(db,scope,member,item,version,self._words,now,confidence)
+        retrieval.index_fact(db,ident,self._words)
+        return ident
 
     def _evidence(self,item,member,events,observation=False):
         evidence=item.get('evidence',[])
@@ -171,38 +193,7 @@ class MemoryService:
         return not observation or len({events[e['id']]['text'] for e in evidence})>=3
 
     def _relation(self,db,scope,member,rows,proposal,events,now):
-        exchanges=[r for r in rows if r['member']==member and r['kind'] in ('exchange','activity')]
-        if not exchanges:return
-        typ='neutral'
-        if proposal.get('type') in ('positive','friction','repair') and proposal.get('confidence')=='high' and self._evidence(proposal,member,events):
-            typ=proposal['type']
-        evidence_rows=[events[e['id']] for e in proposal.get('evidence',[]) if isinstance(e,dict) and e.get('id') in events] if typ!='neutral' else []
-        if typ=='friction' and len({r['text'] for r in evidence_rows})<2:typ='neutral'
-        # One half-hour interaction window, not one point per incoming message.
-        buckets={int(r['created']//1800):r for r in exchanges}
-        for bucket,row in sorted(buckets.items()):
-            bucket_type=typ if any(int(r['created']//1800)==bucket for r in evidence_rows) else 'neutral'
-            source=str(bucket);day=datetime.fromtimestamp(row['created'],TZ).date().isoformat()
-            existing=db.execute('SELECT * FROM relationship_events WHERE scope=? AND member=? AND source=?',(scope,member,source)).fetchone()
-            if existing and (existing['affinity'] or bucket_type=='neutral'):continue
-            count=db.execute('SELECT count(*),coalesce(sum(familiarity),0),coalesce(sum(abs(affinity)),0) FROM relationship_events WHERE scope=? AND member=? AND day=?',(scope,member,day)).fetchone()
-            # Very short/repeated greetings do not build a relationship on their own.
-            meaningful=len(re.sub(r'[\W_]+','',row['text']))>=8 or row['kind']=='activity'
-            repeated=db.execute("SELECT 1 FROM events WHERE scope=? AND member=? AND text=? AND kind IN ('exchange','activity') AND id!=? AND created<? AND created>? LIMIT 1",
-                (scope,member,row['text'],row['id'],bucket*1800,row['created']-7*86400)).fetchone()
-            if repeated:meaningful=False
-            df=min(2,max(0,4-count[1])) if meaningful and not existing else 0
-            da={'positive':1,'friction':-2,'repair':1}.get(bucket_type,0) if meaningful else 0
-            if count[2]+abs(da)>6:da=0
-            if not da:bucket_type='neutral'
-            evidence=proposal.get('evidence',[]) if bucket_type!='neutral' else [{'id':row['id']}]
-            if existing:
-                db.execute('UPDATE relationship_events SET affinity=?,kind=?,evidence=? WHERE id=?',
-                    (da,bucket_type,json.dumps(json.loads(existing['evidence'])+evidence),existing['id']))
-            else:
-                db.execute('INSERT INTO relationship_events(scope,member,source,day,familiarity,affinity,kind,evidence,created,reducer_version) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                    (scope,member,source,day,df,da,bucket_type,json.dumps(evidence),row['created'],REL_VERSION))
-        self._rebuild(db,scope,member,now)
+        relation(self,db,scope,member,rows,proposal,events,now,TZ,REL_VERSION)
 
     def _rebuild(self,db,scope,member,now):
         rows=db.execute('SELECT * FROM relationship_events WHERE scope=? AND member=? ORDER BY created,id',(scope,member)).fetchall()
@@ -231,13 +222,23 @@ class MemoryService:
             rows=[dict(r) for r in db.execute('SELECT * FROM events WHERE scope=? AND processed=0 ORDER BY id LIMIT 40',(selected,))]
             while (len(json.dumps(rows,ensure_ascii=False))>11000 or len({r['member'] for r in rows})>8) and len(rows)>1:rows.pop()
             members={r['member']:r['version'] for r in rows}
-            previous={m:[{'slot':r['slot'],'value':r['value'],'topic':r['topic']} for r in self._visible(db,selected,m)[:12]] for m in members}
+            previous={}
+            for m in members:
+                acl,params=profiles.access(db,selected,m)
+                visible=db.execute("SELECT f.* FROM facts f WHERE "+acl+" AND f.status='active' ORDER BY f.asserted_at DESC LIMIT 200",params).fetchall()
+                keywords=list(dict.fromkeys(t for row in rows if row['member']==m
+                    for t in retrieval.terms(row['text'],self._words)))[:96]
+                visible=sorted(visible,key=lambda r:(retrieval.rank(r['value']+' '+r['topic']+' '+
+                    (' '.join(retrieval.quotes(r['evidence'])) if r['scope']==selected else ''),keywords,self._words),r['asserted_at']),reverse=True)
+                previous[m]=[{'slot':r['slot'],'value':r['value'],'topic':r['topic'],
+                    'status':'needs_confirmation' if r['conflict'] else r['status'],
+                    **({'asserted_at':datetime.fromtimestamp(r['asserted_at'],TZ).isoformat()} if r['scope']==selected else {})} for r in visible[:12]]
             while len(json.dumps(previous,ensure_ascii=False))>5000:
                 longest=max(previous,key=lambda m:len(previous[m]))
                 previous[longest].pop()
         payload={'previous':previous,'events':[{k:r[k] for k in ('id','member','kind','text','assistant','created')} for r in rows]}
         try:
-            answer,_=ai.complete([{'role':'system','content':POLICY},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],max_tokens=6000)
+            answer,_=ai.complete([{'role':'system','content':POLICY},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],max_tokens=10000)
             value=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',answer.strip()))
             if not isinstance(value,dict) or not isinstance(value.get('members'),list):raise ValueError('Invalid memory extraction')
             by_member={}
@@ -249,10 +250,15 @@ class MemoryService:
                 db.execute('BEGIN IMMEDIATE')
                 job=db.execute('SELECT token FROM jobs WHERE scope=?',(selected,)).fetchone()
                 if not job or job[0]!=token:return False
+                memory_budget=24
                 for member,version in members.items():
                     control=db.execute('SELECT version,disabled FROM controls WHERE scope=? AND member=?',(selected,member)).fetchone()
                     if not control or control['disabled'] or control['version']!=version:continue
                     proposal=by_member.get(member,{})
+                    memories=proposal.get('memories',[])
+                    memories=memories[:memory_budget] if isinstance(memories,list) else []
+                    memory_budget-=len(memories)
+                    evidence_store.write(db,selected,member,memories,events,self._words,self.eligible)
                     proposals=proposal.get('facts',[])
                     for fact in (proposals if isinstance(proposals,list) else [])[:6]:
                         if not isinstance(fact,dict) or fact.get('slot') not in SLOTS or fact.get('kind') not in ('self_report','observation'):continue
@@ -272,9 +278,9 @@ class MemoryService:
                     self._relation(db,selected,member,rows,rel if isinstance(rel,dict) else {},events,now)
                     for r in rows:
                         if r['member']!=member or r['kind'] not in ('exchange','activity'):continue
-                        text=('你们曾讨论：'+r['text'][:180]+'；已确认回应：'+r['assistant'][:180]) if r['kind']=='exchange' else r['text'][:300]
+                        text=retrieval.episode_text(r)
                         cur=db.execute('INSERT OR IGNORE INTO episodes(scope,member,source,text,created,evidence) VALUES(?,?,?,?,?,?)',
-                                       (selected,member,r['source'],text,r['created'],json.dumps([{'id':r['id']}])) )
+                                       (selected,member,r['source'],text,r['created'],retrieval.episode_evidence(r)) )
                         if cur.rowcount:db.execute('INSERT INTO episode_search VALUES(?,?)',(cur.lastrowid,self._words(text)))
                 db.executemany('UPDATE events SET processed=1 WHERE id=?',[(r['id'],) for r in rows])
                 db.execute('UPDATE jobs SET lease_until=0,error=NULL WHERE scope=? AND token=?',(selected,token))
@@ -295,7 +301,7 @@ class MemoryService:
         acl,params=profiles.access(db,scope,member)
         return profiles.deduplicate(db.execute("SELECT f.* FROM facts f WHERE "+acl+" AND f.status='active' AND f.conflict=0 AND (f.kind!='observation' OR f.recorded_at>?) ORDER BY CASE f.slot WHEN 'boundary' THEN 0 WHEN 'nickname' THEN 1 ELSE 2 END,f.recorded_at DESC LIMIT 100",(*params,time.time()-30*86400)).fetchall())
 
-    def context(self,group,sender,related=(),compact=False):
+    def context(self,group,sender,related=(),compact=False,query=''):
         if self.shadow:return ''
         with self.db() as db:
             control=self._ensure(db,group,sender);scope,member=control['scope'],control['member']
@@ -303,9 +309,15 @@ class MemoryService:
             facts=self._visible(db,scope,member)
             core=[f for f in facts if f['slot'] in ('boundary','nickname')]
             optional=[f for f in facts if f['slot'] not in ('boundary','nickname')]
-            notes=core+([] if compact=='essential' else optional[:max(0,(3 if compact else 8)-len(core))])
+            notes=core+([] if compact=='essential' else optional[:max(0,(3 if compact else 4 if query else 8)-len(core))])
+            def note(f):
+                status='needs_confirmation' if f['conflict'] else f['status']
+                if f['kind']=='observation' and f['recorded_at']<time.time()-30*86400:status='stale_observation'
+                value={'text':f['value'],'kind':f['kind'],'status':status}
+                if f['scope']==scope:value['asserted_at']=datetime.fromtimestamp(f['asserted_at'],TZ).isoformat()
+                return value
             result={'current_speaker_key':member_key(group,sender),'relationship':self._brief(db,scope,member),
-                    'speaker_notes':[{'text':f['value'],'kind':f['kind']} for f in notes],
+                    'speaker_notes':[note(f) for f in notes],
                     'related_members':[]}
             if not compact:
                 for person in related[:2]:
@@ -313,38 +325,117 @@ class MemoryService:
                     peer=self._ensure(db,group,person['sender'])
                     if peer['disabled']:continue
                     result['related_members'].append({'speaker_key':member_key(group,person['sender']),'name':person['name'][:60],
-                        'notes':[{'text':f['value'],'kind':f['kind']} for f in self._visible(db,scope,peer['member'])[:3]]})
+                        'notes':[note(f) for f in self._visible(db,scope,peer['member'])[:3]]})
+        if query and not compact:
+            keywords=retrieval.query(query,self._words)
+            if keywords:
+                result['relevant_memories']=self.recall(group,sender,{'query':keywords},question=query)
+                if result['relevant_memories'].get('status')=='changed':
+                    return self.context(group,sender,related,compact=compact)
+                # Query-dependent material is lower priority than explicit boundaries.
+                budget=9000 if self.reader_factory and self.config.get('member_memory',{}).get('semantic_read',True) else 6500
+                while len(json.dumps(result,ensure_ascii=False))>budget and result['relevant_memories']['items']:
+                    result['relevant_memories']['items'].pop()
+                    result['relevant_memories']['partial']=True
         return json.dumps(result,ensure_ascii=False)
 
-    def recall(self,group,sender,args):
+    def recall(self,group,sender,args,question=None):
         if not isinstance(args,dict) or set(args)-{'query','kind'}:return {'error':'只能查询自己的当前会话记忆。'}
         query=args.get('query','');kind=args.get('kind','all')
         if not isinstance(query,str) or len(query)>80 or kind not in ('all','profile','experience'):return {'error':'参数无效。'}
+        semantic=bool(query.strip() and self.reader_factory and self.config.get('member_memory',{}).get('semantic_read',True))
         with self.db() as db:
             control=self._ensure(db,group,sender);scope,member=control['scope'],control['member']
             if control['disabled']:return {'status':'disabled','items':[],'partial':False}
-            result=[]
+            ranked=[];keywords=retrieval.terms(query,self._words)
             for table,index in [('facts','fact_search'),('episodes','episode_search')]:
                 if (table=='facts' and kind=='experience') or (table=='episodes' and kind=='profile'):continue
-                col='value' if table=='facts' else 'text';date='recorded_at' if table=='facts' else 'created'
+                col='value' if table=='facts' else 'text';date='asserted_at' if table=='facts' else 'created'
                 # All filters are applied before results leave storage.
                 acl,params=profiles.access(db,scope,member,'t') if table=='facts' else ('t.scope=? AND t.member=?',(scope,member))
+                linked_terms={}
                 if query.strip():
-                    terms=self._words(query).split()[:40]
+                    terms=keywords
                     if not terms:continue
-                    match=' OR '.join('"'+t+'"' for t in terms)
-                    rows=db.execute(f'SELECT t.* FROM {table} t JOIN {index} s ON s.id=t.id WHERE {index} MATCH ? AND '+acl+f' ORDER BY bm25({index}) LIMIT 8',(match,*params)).fetchall()
+                    found={}
+                    for match,limit in retrieval.matches(terms):
+                        for r in db.execute(f'SELECT t.* FROM {table} t JOIN {index} s ON s.id=t.id WHERE {index} MATCH ? AND '+acl+f' ORDER BY bm25({index}),t.{date} DESC LIMIT ?',(match,*params,limit)):
+                            found[r['id']]=r
+                        if table=='facts':
+                            # Shared values never grant source quotation access.
+                            for r in db.execute('SELECT t.* FROM facts t JOIN fact_evidence_search s ON s.id=t.id WHERE fact_evidence_search MATCH ? AND '+acl+' AND t.scope=? ORDER BY bm25(fact_evidence_search),t.asserted_at DESC LIMIT ?',(match,*params,scope,limit)):
+                                found[r['id']]=r
+                    rows=list(found.values())
+                    if table=='facts':
+                        seeds=sorted(rows,key=lambda r:retrieval.rank(r['value']+' '+(' '.join(retrieval.quotes(r['evidence'])) if r['scope']==scope else ''),keywords,self._words),reverse=True)[:8]
+                        for seed in seeds:
+                            if not seed['topic']:continue
+                            seed_words=set(self._words(seed['value']+' '+(' '.join(retrieval.quotes(seed['evidence'])) if seed['scope']==scope else '')).split())&set(keywords)
+                            for r in db.execute('SELECT t.* FROM facts t WHERE '+acl+' AND t.slot=? AND t.topic=? ORDER BY t.asserted_at DESC LIMIT 3',(*params,seed['slot'],seed['topic'])):
+                                found[r['id']]=r
+                                linked_terms.setdefault(r['id'],set()).update(seed_words)
+                        rows=list(found.values())
                 else:rows=db.execute(f'SELECT t.* FROM {table} t WHERE '+acl+f' ORDER BY t.{date} DESC LIMIT 8',params).fetchall()
-                if table=='facts':rows=profiles.deduplicate(rows)
+                if table=='facts':rows=profiles.deduplicate(sorted(rows,key=lambda r:(r['scope']==scope,r['asserted_at']),reverse=True))
                 for r in rows:
+                    if table=='episodes':
+                        windows=retrieval.episode_windows(r['text'],r['evidence'],keywords,self._words)
+                        if windows:
+                            sources={str(e['id']) for e in json.loads(r['evidence']) if isinstance(e,dict) and 'id' in e}
+                            for text,basis,truncated in windows:
+                                item={'text':text,'kind':'experience','status':'confirmed','basis':basis,
+                                    'asserted_at':datetime.fromtimestamp(r['created'],TZ).isoformat(),'truncated':truncated}
+                                ranked.append((text,r['created'],sources,item,set()))
+                            continue
                     status=r['status'] if table=='facts' else 'confirmed'
                     if table=='facts' and r['conflict']:status='needs_confirmation'
                     if table=='facts' and r['kind']=='observation' and r['recorded_at']<time.time()-30*86400:status='stale_observation'
-                    result.append({'text':r[col][:300],'kind':'profile' if table=='facts' else 'experience','status':status,
+                    support=sorted(retrieval.quotes(r['evidence']),key=lambda s:retrieval.rank(s,keywords,self._words),reverse=True)[:2] if table=='facts' and r['scope']==scope else []
+                    text,truncated=retrieval.excerpt(r[col],keywords,self._words,limit=600)
+                    item={'text':text,'kind':'profile' if table=='facts' else 'experience','status':status,
                         'basis':r['kind'] if table=='facts' else 'confirmed_exchange',
-                        'recorded_at':datetime.fromtimestamp(r[date],TZ).isoformat(),
-                        'valid_from':r['valid_from'] if table=='facts' else None})
-            return {'status':'ok' if result else 'empty','items':result[:6],'partial':len(result)>6}
+                        'recorded_at':datetime.fromtimestamp(r['recorded_at'] if table=='facts' else r['created'],TZ).isoformat(),
+                        'valid_from':r['valid_from'] if table=='facts' else None,'truncated':truncated}
+                    if support:item['source_quotes']=support
+                    if table=='facts':item['topic']=r['topic']
+                    if r['scope']==scope:item['asserted_at']=datetime.fromtimestamp(r['asserted_at'] if table=='facts' else r['created'],TZ).isoformat()
+                    sources={str(e['id']) for e in json.loads(r['evidence']) if isinstance(e,dict) and 'id' in e} if r['scope']==scope else set()
+                    search_text=r[col]+' '+' '.join(support)
+                    if table=='episodes' and '已确认的机器人回应：' in search_text and not re.search(r'recommend|suggest|advice|assistant|你.*(?:推荐|建议)',query,re.I):
+                        user_text=search_text.split('已确认的机器人回应：',1)[0]
+                        if retrieval.rank(user_text,keywords,self._words):search_text=user_text
+                    ranked.append((search_text,r[date],sources or {table+str(r['id'])},item,linked_terms.get(r['id'],set())))
+            if kind=='all' and keywords:
+                source_rows=evidence_store.candidates(db,scope,member,keywords,retrieval,self._words)
+                if semantic:
+                    source_rows=list({r['id']:r for r in [*source_rows,*evidence_store.candidates(db,scope,member,None,retrieval,self._words)]}.values())
+                for r in source_rows:
+                    text,truncated=retrieval.excerpt(r['quote'],keywords,self._words,limit=600)
+                    item={'text':text,'kind':'source_evidence','status':'quoted',
+                        'basis':r['role']+'_statement','event_type':r['kind'],
+                        'asserted_at':datetime.fromtimestamp(r['asserted_at'],TZ).isoformat(),
+                        'truncated':truncated}
+                    ranked.append((r['quote']+' '+r['summary'],r['asserted_at'],{str(r['event_id'])},item,set(),r['summary']))
+            revision=db.execute('SELECT revision FROM subjects WHERE member=?',(member,)).fetchone()[0]
+            version=control['version']
+        # Never hold a SQLite transaction during a provider call.
+        detail='lexical'
+        if semantic:
+            try:selected,detail=member_selector.choose(question or query,ranked,self.reader_factory,self._words)
+            except Exception:
+                selected=retrieval.select(ranked,keywords,self._words,budget=6400)
+                detail='semantic_failed_lexical_fallback'
+            with self.db() as db:
+                current=db.execute('SELECT revision FROM subjects WHERE member=?',(member,)).fetchone()
+                control=db.execute('SELECT version,disabled FROM controls WHERE scope=? AND member=?',(scope,member)).fetchone()
+                if not current or current[0]!=revision or not control or control['version']!=version or control['disabled']:
+                    return {'status':'changed','items':[],'partial':True,'detail':'memory_changed_during_selection'}
+        else:selected=retrieval.select(ranked,keywords,self._words,budget=6400)
+        result={'status':'ok' if selected else 'empty','items':selected,'partial':len(ranked)>len(selected),'detail':detail}
+        while len(json.dumps(result,ensure_ascii=False))>(9000 if semantic else 6500) and selected:
+            selected.pop();result['partial']=True
+        if not selected:result['status']='empty'
+        return result
 
     def handler(self,group,sender,request,source,readonly=False):
         cache={};reads=0;revision=None
@@ -383,6 +474,9 @@ class MemoryService:
         for r in all_facts:
             if r['id'] in ids:evidence.update(e.get('id') for e in json.loads(r['evidence']) if isinstance(e,dict) and type(e.get('id')) is int)
         evidence.update(r[0] for r in db.execute('SELECT id FROM events WHERE member=? AND instr(text,?)>0'+('' if core else ' AND scope=?'),(member,description) if core else (member,description,scope)))
+        evidence.update(r[0] for r in db.execute('SELECT event_id FROM memory_evidence WHERE member=? AND (instr(quote,?)>0 OR instr(summary,?)>0)'+('' if core else ' AND scope=?'),(member,description,description) if core else (member,description,description,scope)))
+        for r in db.execute('SELECT evidence FROM episodes WHERE member=? AND instr(text,?)>0'+('' if core else ' AND scope=?'),(member,description) if core else (member,description,scope)):
+            evidence.update(e.get('id') for e in json.loads(r[0]) if isinstance(e,dict) and type(e.get('id')) is int)
         affected={scope}
         for table,index in [('episodes','episode_search'),('relationship_events',None)]:
             for r in db.execute(f'SELECT * FROM {table} WHERE member=?'+('' if core else ' AND scope=?'),(member,) if core else (member,scope)).fetchall():
@@ -394,10 +488,12 @@ class MemoryService:
         db.executemany('DELETE FROM fact_search WHERE id=?',[(i,) for i in ids])
         db.executemany('DELETE FROM facts WHERE id=?',[(i,) for i in ids])
         # Unrelated facts from a shared sentence keep only evidence without the erased topic.
-        for r in all_facts:
+        remaining=db.execute('SELECT * FROM facts WHERE member=?'+('' if core else ' AND scope=?'),(member,) if core else (member,scope)).fetchall()
+        for r in remaining:
             if r['id'] not in ids:
                 clean=[e for e in json.loads(r['evidence']) if e.get('id') not in evidence and description not in e.get('quote','')]
                 db.execute('UPDATE facts SET evidence=? WHERE id=?',(json.dumps(clean,ensure_ascii=False),r['id']))
+                retrieval.index_fact(db,r['id'],self._words)
         db.executemany('DELETE FROM events WHERE member=? AND id=?',[(member,i) for i in evidence])
         for room in affected:self._rebuild(db,room,member,time.time())
 
@@ -444,7 +540,8 @@ class MemoryService:
                 grouped={}
                 for r in targets:grouped.setdefault((r['slot'],r['topic']),r)
                 targets=list(grouped.values())
-            if action in ('correct','forget','share','unshare') and desc and len(targets)!=1:return {'error':'没有唯一匹配，请用更具体的内容说明。'}
+            evidence_only=action=='forget' and desc and not targets and (evidence_store.matching_sources(db,scope,member,desc) or db.execute('SELECT 1 FROM episodes WHERE scope=? AND member=? AND instr(text,?)>0 LIMIT 1',(scope,member,desc)).fetchone())
+            if action in ('correct','forget','share','unshare') and desc and len(targets)!=1 and not evidence_only:return {'error':'没有唯一匹配，请用更具体的内容说明。'}
             if action=='correct' and not desc:return {'error':'请说明要纠正的原有内容。'}
             if action in ('share','unshare') and (not desc or not targets or targets[0]['slot'] not in profiles.CORE or targets[0]['conflict']):return {'error':'只能共享已确认的基础资料，请说明具体哪一条。'}
             if action in ('remember','correct') and control['disabled']:return {'error':'当前已停记，请先明确恢复记忆。'}
@@ -465,7 +562,12 @@ class MemoryService:
             elif action=='forget':
                 self._purge_legacy(group,sender)
                 if desc:
-                    self._forget_fact(db,scope,member,targets[0],desc)
+                    if targets:self._forget_fact(db,scope,member,targets[0],desc)
+                    else:
+                        # A quotation may have no profile row. Reuse source-based
+                        # cleanup, so related facts and episodes cannot leak it.
+                        placeholder={'id':-1,'slot':'communication','topic':''}
+                        self._forget_fact(db,scope,member,placeholder,desc)
                 else:
                     for table,index in [('facts','fact_search'),('episodes','episode_search')]:
                         db.execute(f'DELETE FROM {index} WHERE id IN (SELECT id FROM {table} WHERE scope=? AND member=?)',(scope,member))
@@ -504,6 +606,7 @@ class MemoryService:
             db.execute('PRAGMA incremental_vacuum(100)')
 
     def start(self,ai_factory,groups):
+        if self.reader_factory is None:self.reader_factory=ai_factory
         if self.thread:return
         def work():
             last_maintenance=0

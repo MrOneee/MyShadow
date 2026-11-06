@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "auto_discovery": true,
+  "window_days": 7,
+  "min_mentions": 3,
+  "decision_interval_seconds": 300,
+  "max_messages_per_scope": 200,
+  "max_searches_per_day": 12,
+  "max_decision_chars": 12000,
+  "use_probability": 0.12,
+  "use_cooldown_seconds": 1800,
+  "stale_days": 90,
+  "max_context_chars": 1200,
+  "admin_ids": []
+}

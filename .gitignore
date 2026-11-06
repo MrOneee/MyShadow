@@ -8,6 +8,7 @@ bot-health.json
 routing-safety-lock.json
 data/
 social-memory/
+meme-memory/
 harness-data/
 logs/
 backups/
@@ -37,3 +38,8 @@ docs/*deployment*.json
 docs/*production-check*.json
 docs/*harness-smoke*.json
 benchmarks/*results*.json
+
+# Private/generated evaluation traces, deployment records and source archives.
+benchmarks/memory-eval-*/
+benchmarks/memory-deployment-*/
+benchmarks/memory-goal-records-audit.json

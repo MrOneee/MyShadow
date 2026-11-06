@@ -54,40 +54,69 @@ def deduplicate(rows):
 def write(db,scope,member,item,version,words,now=None,confidence='high'):
     now=time.time() if now is None else now
     slot,value=item['slot'],item['value'];core=slot in CORE
-    key=item.get('topic') or topic(slot,value)
+    target=db.execute('SELECT * FROM facts WHERE id=? AND member=? AND slot=?',
+        (item['supersedes'],member,slot)).fetchone() if item.get('supersedes') else None
+    # A correction continues the known subject even if its new wording changes.
+    key=item.get('topic') or (target['topic'] if target else None) or topic(slot,value)
     if not isinstance(key,str) or not 1<=len(key)<=60:key=topic(slot,value)
     asserted=item.get('_asserted_at',now)
+    explicit=item.get('replace') is True or target is not None
     same=db.execute("SELECT * FROM facts WHERE scope=? AND member=? AND slot=? AND value=? AND status='active' AND conflict=0",(scope,member,slot,value)).fetchone()
-    if same and not item.get('supersedes'):return same['id']
-    candidates=[];older=[];conflict=0;status='active';replaced_by=None
+    candidates=[];older=[];conflict=0;status='active';replaced_by=None;valid_to=None
     if core:
         candidates=db.execute("SELECT * FROM facts WHERE member=? AND slot=? AND topic=? AND status='active'",(member,slot,key)).fetchall()
+        if target and target['topic']!=key:
+            related=db.execute("SELECT * FROM facts WHERE member=? AND slot=? AND topic=? AND status='active'",(member,slot,target['topic'])).fetchall()
+            candidates=list({r['id']:r for r in [*candidates,*related]}.values())
         differing=[r for r in candidates if normalized(r['value'])!=normalized(value)]
-        if differing:
-            latest=max(differing,key=lambda r:r['asserted_at'])
-            if asserted<latest['asserted_at']:
-                status='superseded';replaced_by=latest['id']
-            elif item.get('replace') is True:
-                older=differing
-            else:
+        if explicit:
+            later=[r for r in candidates if r['asserted_at']>asserted]
+            simultaneous=[r for r in differing if r['asserted_at']==asserted]
+            if later:
+                latest=max(later,key=lambda r:(r['asserted_at'],r['id']))
+                status='superseded';replaced_by=latest['id'];valid_to=latest['asserted_at']
+                next_assertion=db.execute('SELECT min(asserted_at) FROM facts WHERE member=? AND slot=? AND topic=? AND asserted_at>?',
+                    (member,slot,key,asserted)).fetchone()[0]
+                if next_assertion is not None:valid_to=min(valid_to,next_assertion)
+            elif simultaneous:
+                # There is no reliable temporal order for contradictory values
+                # extracted from the same event, even if both say replace.
                 conflict=1
-                db.executemany('UPDATE facts SET conflict=1 WHERE id=?',[(r['id'],) for r in differing])
-    elif item.get('replace') or slot=='nickname':
-        older=db.execute("SELECT * FROM facts WHERE scope=? AND member=? AND slot=? AND status='active'",(scope,member,slot)).fetchall()
-        if slot!='nickname' and len(older)>1:older=[]
-    if item.get('supersedes'):
-        target=db.execute('SELECT * FROM facts WHERE id=? AND member=?',(item['supersedes'],member)).fetchone()
-        if target:
-            status='active';replaced_by=None;conflict=0
-            related=db.execute("SELECT * FROM facts WHERE member=? AND slot=? AND topic=? AND status='active'",(member,target['slot'],target['topic'])).fetchall() if core else [target]
-            older=list({r['id']:r for r in [*older,*related]}.values())
-    cur=db.execute('INSERT INTO facts(scope,member,slot,value,kind,confidence,recorded_at,valid_from,status,evidence,supersedes,version,topic,visibility,asserted_at,conflict,replaced_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        (scope,member,slot,value,item.get('kind','self_report'),confidence,now,item.get('valid_from'),status,
-         json.dumps(item.get('evidence',[]),ensure_ascii=False),item.get('supersedes') or (older[0]['id'] if older else None),version,key,
+            else:
+                # Do not deduplicate a repeated explicit confirmation: its new
+                # evidence/date resolves older conflicts and must be retained.
+                older=candidates
+        elif differing:
+            # An ordinary assertion is not a state transition. Arrival order or
+            # message timestamps alone must not decide which statement is true.
+            conflict=1
+        elif same and same['topic']==key:
+            return same['id']
+        if conflict:
+            db.executemany('UPDATE facts SET conflict=1 WHERE id=?',[(r['id'],) for r in candidates])
+    else:
+        if same and not explicit:return same['id']
+        if explicit or slot=='nickname':
+            older=db.execute("SELECT * FROM facts WHERE scope=? AND member=? AND slot=? AND status='active'",(scope,member,slot)).fetchall()
+            if slot!='nickname' and len(older)>1:older=[]
+        if target:older=list({r['id']:r for r in [*older,target]}.values())
+    predecessor=target['id'] if target and (not core or target['asserted_at']<=asserted) else (max(older,key=lambda r:(r['asserted_at'],r['id']))['id'] if older else None)
+    if core and explicit and status=='superseded' and predecessor is None:
+        earlier=db.execute('SELECT id FROM facts WHERE member=? AND slot=? AND topic=? AND asserted_at<? ORDER BY asserted_at DESC,id DESC LIMIT 1',
+            (member,slot,key,asserted)).fetchone()
+        if earlier:predecessor=earlier['id']
+    cur=db.execute('INSERT INTO facts(scope,member,slot,value,kind,confidence,recorded_at,valid_from,valid_to,status,evidence,supersedes,version,topic,visibility,asserted_at,conflict,replaced_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (scope,member,slot,value,item.get('kind','self_report'),confidence,now,item.get('valid_from'),valid_to,status,
+         json.dumps(item.get('evidence',[]),ensure_ascii=False),predecessor,version,key,
          item.get('_visibility','local') if core else 'local',asserted,conflict,replaced_by))
     ident=cur.lastrowid
+    if core and explicit and status=='superseded':
+        # A delayed state update can fill a historical interval without changing
+        # the current value or the direct replacement pointers used for ACLs.
+        db.execute("UPDATE facts SET valid_to=? WHERE member=? AND slot=? AND topic=? AND status='superseded' AND asserted_at<? AND valid_to>?",
+            (asserted,member,slot,key,asserted,asserted))
     for r in older:
-        db.execute("UPDATE facts SET status='superseded',valid_to=?,replaced_by=?,conflict=0 WHERE id=?",(now,ident,r['id']))
+        db.execute("UPDATE facts SET status='superseded',valid_to=?,replaced_by=?,conflict=0 WHERE id=?",(asserted if core else now,ident,r['id']))
         # Every obsolete version points to the current replacement, preventing indirect ACL leaks.
         db.execute('UPDATE facts SET replaced_by=? WHERE member=? AND replaced_by=?',(ident,member,r['id']))
     db.execute('INSERT INTO fact_search VALUES(?,?)',(ident,words(value)))
