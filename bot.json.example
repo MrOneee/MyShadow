@@ -37,6 +37,7 @@
   },
   "selective_reply": {
     "enabled": false,
+    "probability_settings_file": "group-reply-settings.json",
     "groups": [],
     "aliases": [
       "影",

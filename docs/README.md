@@ -20,6 +20,7 @@
 ## 会话与定时任务 · conversation
 
 - [群聊参与决策](conversation/SELECTIVE_REPLY.md)
+- [按群配置发言概率](conversation/GROUP_REPLY_PROBABILITY.md)
 - [私聊支持](conversation/private-messages.md)
 - [定时与周期任务](conversation/SCHEDULED_TASKS.md)
 

@@ -172,6 +172,8 @@ class ParticipationDecision:
         action = result['action']
         if action=='wait' and turn:
             action='silent'
+        if action in ('brief','answer','initiate') and not self.owner.reply_probability.allows(group):
+            action='silent'
         with self.db:
             self.db.execute('UPDATE participation_turns SET action=?,wait_until=? WHERE group_id=? AND anchor_key=? AND phase=?',
                 (action,now+10 if action=='wait' else 0,group,key,phase))

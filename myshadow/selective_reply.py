@@ -2,7 +2,9 @@
 import json
 import re
 import time
+from pathlib import Path
 from .participation_decision import ParticipationDecision
+from .group_reply_probability import GroupReplyProbability
 from .shared_links import shared_link_text
 
 
@@ -45,6 +47,8 @@ class SelectiveReply:
         self.state, self.ai = state, ai
         self.bot_id = bot_id
         self._persona = persona
+        self.reply_probability = GroupReplyProbability(config.get('probability_settings_file') or
+            Path(__file__).resolve().parents[1] / 'group-reply-settings.json')
         self.groups = set(config.get('groups', []))
         self.aliases = config.get('aliases', ['影', '道长'])
         if (not isinstance(config.get('groups', []), list)
@@ -198,6 +202,8 @@ class SelectiveReply:
                 respond = ((decision == 'followup' and followup) or
                            (decision == 'public_question' and not recent and not outstanding))
                 kind = 'followup' if decision == 'followup' and followup else 'ambient'
+            if respond and not explicit:
+                respond = self.reply_probability.allows(group)
             if respond:
                 with self.state:
                     self.state.execute('INSERT OR IGNORE INTO replies(group_id,shard,local_id,created,prompt,status) '
